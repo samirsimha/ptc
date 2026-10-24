@@ -84,11 +84,46 @@ class ScheduleAgentTests(unittest.TestCase):
         self.assertEqual(result["fix"]["status"], "proposed")
         self.assertIn("passed schedule checks", result["note"])
         self.assertEqual(
+            {notification["recipient"] for notification in result["notifications"]},
+            {"Jules Park", "Riley Chen"},
+        )
+        self.assertTrue(all(
+            notification["status"] == "draft"
+            for notification in result["notifications"]
+        ))
+        self.assertEqual(
             self.graph.query(
                 "MATCH (t:Talk {id: 'talk-followup'}) RETURN t.start, t.end"
             ).result_set,
             original_times,
         )
+
+    def test_comms_drafts_notifications_only_for_people_on_moved_talks(self):
+        incident = agents.record_incident(
+            self.graph,
+            "The keynote went 10 minutes over",
+            stub_model_client({
+                "incident_type": "overrun",
+                "target_talk_id": "talk-keynote",
+                "mins": 10,
+            }),
+        )
+        fix = agents.schedule_overrun(self.graph, incident)
+
+        notifications = agents.draft_notifications(self.graph, fix)
+
+        self.assertEqual(
+            {notification["recipient"] for notification in notifications},
+            {"Jules Park", "Riley Chen"},
+        )
+        rows = self.graph.query(
+            "MATCH (agent:Agent {id: 'agent-comms'})-[:DRAFTED]->"
+            "(n:Notification)-[:TO]->(person:Person) "
+            "RETURN person.name, n.status, n.body ORDER BY person.name"
+        ).result_set
+        self.assertEqual({row[0] for row in rows}, {"Jules Park", "Riley Chen"})
+        self.assertTrue(all(row[1] == "draft" for row in rows))
+        self.assertTrue(all("organizer approves" in row[2] for row in rows))
 
     def test_schedule_agent_stages_overrun_changes_without_applying_them(self):
         incident = agents.record_incident(

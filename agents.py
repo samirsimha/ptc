@@ -463,12 +463,93 @@ def schedule_overrun(g, incident, client=None):
     }
 
 
+# Draft one notification for each presenter or attendee of a talk in the proposed changes.
+def draft_notifications(g, fix):
+    recipients = {}
+    changes_by_talk = {
+        change["talk_id"]: change
+        for change in fix["staged_changes"]
+    }
+    for talk_id, change in changes_by_talk.items():
+        talk_rows = g.query(
+            "MATCH (t:Talk {id: $talk_id}) RETURN t.title",
+            {"talk_id": talk_id},
+        ).result_set
+        if not talk_rows:
+            raise ValueError(f"Cannot draft notification for missing talk: {talk_id}")
+        talk_title = talk_rows[0][0]
+
+        for relationship in ("PRESENTS", "RSVP"):
+            rows = g.query(
+                f"MATCH (person:Person)-[:{relationship}]->"
+                "(talk:Talk {id: $talk_id}) "
+                "RETURN person.id, person.name",
+                {"talk_id": talk_id},
+            ).result_set
+            for person_id, person_name in rows:
+                recipient = recipients.setdefault(person_id, {
+                    "name": person_name,
+                    "changes": {},
+                })
+                recipient["changes"][talk_id] = {
+                    "title": talk_title,
+                    "start": change["start"],
+                    "end": change["end"],
+                }
+
+    notifications = []
+    for person_id, recipient in recipients.items():
+        moved_talks = ", ".join(
+            f"{change['title']} to {change['start'] // 60:02d}:"
+            f"{change['start'] % 60:02d}–{change['end'] // 60:02d}:"
+            f"{change['end'] % 60:02d}"
+            for change in recipient["changes"].values()
+        )
+        notification_id = f"notification-{uuid4().hex}"
+        body = (
+            f"Draft: {moved_talks} is proposed to move. "
+            "The schedule will change only if the organizer approves the fix."
+        )
+        schema.make_node(
+            g,
+            "Notification",
+            id=notification_id,
+            body=body,
+            status="draft",
+        )
+        schema.link(
+            g,
+            "Agent",
+            "agent-comms",
+            "DRAFTED",
+            "Notification",
+            notification_id,
+        )
+        schema.link(
+            g,
+            "Notification",
+            notification_id,
+            "TO",
+            "Person",
+            person_id,
+        )
+        notifications.append({
+            "id": notification_id,
+            "body": body,
+            "status": "draft",
+            "recipient": recipient["name"],
+        })
+    return notifications
+
+
 # runs Triage and Schedule agents in order and returns the incident and proposed fix
 def run_pipeline(g, text, client=None):
     incident = record_incident(g, text, client)
     fix = schedule_overrun(g, incident, client)
+    notifications = draft_notifications(g, fix)
     return {
         "incident": incident,
         "fix": fix,
+        "notifications": notifications,
         "note": "Proposal passed schedule checks; changes await human approval.",
     }
