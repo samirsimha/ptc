@@ -12,6 +12,7 @@ const approveButton = document.querySelector("#approve-fix");
 const rejectButton = document.querySelector("#reject-fix");
 let currentFixId = null;
 let currentSchedule = [];
+let sessionTitles = new Map();
 let isDeciding = false;
 
 const escapeText = (value) => String(value ?? "");
@@ -113,15 +114,20 @@ function renderFix(result) {
     const title = talk?.title || change.talk_id;
     const row = element("div", "fix-detail");
     const label = element("strong", "", title);
+    const extendsCurrentTalk = talk && change.start === talk.start && change.end > talk.end;
     row.append(label, document.createTextNode(
-      ` moves to ${formatTime(change.start)}–${formatTime(change.end)}`
+      extendsCurrentTalk
+        ? ` extends to ${formatTime(change.end)} (+${change.end - talk.end} min)`
+        : ` moves to ${formatTime(change.start)}–${formatTime(change.end)}`
     ));
     if (talk?.room) row.append(document.createTextNode(` · ${talk.room}`));
     details.append(row);
   }
   for (const change of fix.staged_session_changes || []) {
     const row = element("div", "fix-detail");
-    const sessionName = change.session_title || change.session_id;
+    const sessionName = change.session_title
+      || sessionTitles.get(change.session_id)
+      || change.session_id;
     row.append(
       element("strong", "", sessionName),
       document.createTextNode(` adjusts to ${formatTime(change.start)}–${formatTime(change.end)}`)
@@ -270,6 +276,11 @@ function renderGraph(graph) {
     if (!groups.includes(node.label)) return false;
     return !(node.label === "Person" && node.props?.role === "attendee");
   });
+  sessionTitles = new Map(
+    graph.nodes
+      .filter((node) => node.label === "Session" && node.props?.id && node.props?.title)
+      .map((node) => [node.props.id, node.props.title])
+  );
   const visibleIds = new Set(visibleNodes.map((node) => String(node.id)));
   const links = graph.links.filter((link) =>
     visibleIds.has(String(link.source)) && visibleIds.has(String(link.target))

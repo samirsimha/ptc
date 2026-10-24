@@ -95,7 +95,7 @@ h1 span { color: var(--lime); }
 .room-name { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: -.01em; }
 .room-mark { width: 8px; height: 8px; border: 2px solid var(--purple); border-radius: 2px; transform: rotate(45deg); }
 .room-count { color: #a09da6; font: 8px var(--font-mono); letter-spacing: .08em; }
-.talk-row { position: relative; display: grid; grid-template-columns: max-content minmax(0,1fr) auto; gap: 12px; align-items: center; min-height: 61px; margin-left: 2px; padding: 9px 8px; border-radius: 5px; transition: background .16s; }
+.talk-row { position: relative; display: grid; grid-template-columns: 210px minmax(0,1fr) auto; gap: 12px; align-items: center; min-height: 61px; margin-left: 2px; padding: 9px 8px; border-radius: 5px; transition: background .16s; }
 .talk-row:hover { background: #f7f5fc; }
 .talk-time { color: #725bd1; font: 9px var(--font-mono); white-space: nowrap; }
 .talk-info { min-width: 0; }
@@ -226,8 +226,8 @@ h1 span { color: var(--lime); }
   .schedule-hint { max-width: 81px; font-size: 7px; line-height: 1.4; }
   .schedule-content { padding: 1px 13px 13px; }
   .room-section { padding-top: 15px; }
-  .talk-row { grid-template-columns: max-content minmax(0,1fr); gap: 8px; min-height: 59px; padding: 8px 3px; }
-  .talk-time { font-size: 8px; }
+  .talk-row { grid-template-columns: 155px minmax(0,1fr); gap: 8px; min-height: 59px; padding: 8px 3px; }
+  .talk-time { font-size: 7px; }
   .talk-badge { display: none; }
   .talk-title { font-size: 10px; }
   .talk-meta { font-size: 8px; }

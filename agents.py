@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from uuid import uuid4
 
@@ -16,12 +17,27 @@ class ModelConfigurationError(RuntimeError):
 # uses AI to interpret incident text and returns the details as a dictionary
 def parse_incident(g, text, client=None):
     talks = g.query(
-        "MATCH (t:Talk) RETURN t.id, t.title",
+        "MATCH (t:Talk) "
+        "OPTIONAL MATCH (speaker:Person)-[:PRESENTS]->(t) "
+        "OPTIONAL MATCH (t)-[:IN_SESSION]->(session:Session) "
+        "RETURN t.id, t.title, t.start, t.end, t.status, "
+        "collect(DISTINCT speaker.name), collect(DISTINCT session.title)",
     ).result_set
     if not talks:
         raise ValueError("Cannot triage an incident because the graph has no talks")
 
-    available_talks = [{"id": row[0], "title": row[1]} for row in talks]
+    available_talks = [
+        {
+            "id": row[0],
+            "title": row[1],
+            "start": row[2],
+            "end": row[3],
+            "status": row[4],
+            "presenters": [name for name in (row[5] or []) if name],
+            "sessions": [title for title in (row[6] or []) if title],
+        }
+        for row in talks
+    ]
     if client is None:
         if not os.environ.get("OPENAI_API_KEY"):
             raise ModelConfigurationError(
@@ -38,11 +54,21 @@ def parse_incident(g, text, client=None):
                 "content": (
                     "You are the conference incident triage agent. Return a JSON object "
                     "with incident_type and target_talk_id. Supported incident_type values "
-                    "are 'overrun' and 'no_show'. Use a talk id exactly as provided. For an "
-                    "overrun, also return mins as a positive whole number. A no-show does "
-                    "not need mins. If the text does not clearly describe a supported "
-                    "incident involving one listed talk, "
-                    "return {\"incident_type\":\"unsupported\"}."
+                    "are 'overrun', 'late_start', and 'no_show'. Use a talk id exactly as "
+                    "provided. Use 'late_start' when a speaker/talk will begin later than "
+                    "scheduled; use 'overrun' when a talk has already started and will run "
+                    "longer than scheduled. For an overrun or late_start, return mins as a "
+                    "positive whole number. A no-show does not need mins. If the text does "
+                    "not clearly describe a supported "
+                    "incident involving one listed talk, return "
+                    "{\"incident_type\":\"unsupported\"}. Match speaker "
+                    "names against the presenters list and phrases about an event block "
+                    "against session titles. Choose the talk whose start or duration is "
+                    "affected by the incident. If a named presenter has multiple talks in "
+                    "one session, use the incident wording, talk title, status, and time to "
+                    "select the best matching talk. For a no-show mentioning multiple "
+                    "talks, select the title attached to the no-show clause, not a later "
+                    "talk the person says they will attend."
                 ),
             },
             {
@@ -67,17 +93,59 @@ def parse_incident(g, text, client=None):
     mins = parsed.get("mins")
     talk_ids = {talk["id"] for talk in available_talks}
     incident_type = parsed.get("incident_type")
-    if incident_type not in {"overrun", "no_show"}:
+    normalized_text = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+    explicit_talks = [
+        talk for talk in available_talks
+        if re.sub(r"[^a-z0-9]+", " ", talk["title"].lower()).strip()
+        in normalized_text
+    ]
+    if len(explicit_talks) == 1:
+        target_talk_id = explicit_talks[0]["id"]
+
+    normalized_titles = {
+        talk["id"]: re.sub(r"[^a-z0-9]+", " ", talk["title"].lower()).strip()
+        for talk in explicit_talks
+    }
+    no_show_clause = re.search(
+        r"\b(?:no[\s-]?show|did not show(?: up)?|didn't show(?: up)?)"
+        r"\s+(?:for|at)\s+(?:the\s+)?(.+?)(?=\bbut\b|[.;,]|$)",
+        normalized_text,
+    )
+    if no_show_clause:
+        clause = no_show_clause.group(1)
+        clause_talks = [
+            talk for talk in explicit_talks
+            if normalized_titles[talk["id"]] in clause
+        ]
+        if len(clause_talks) == 1:
+            target_talk_id = clause_talks[0]["id"]
+
+    no_show_cue = re.search(
+        r"\b(no[\s-]?show|did not show|didn't show|absent)\b", text, re.I
+    )
+    late_start_cue = (
+        re.search(r"\b(?:start|begin)\w*\b.{0,100}\b(?:late|later)\b", text, re.I)
+        or re.search(r"\brunning\s+\d+\s+(?:minutes?|mins?)\s+late\b", text, re.I)
+    )
+    if late_start_cue and not no_show_cue:
+        incident_type = "late_start"
+        minutes_match = re.search(
+            r"\b(\d+)\s*(?:minutes?|mins?)\s+(?:late|later)\b", text, re.I
+        )
+        if minutes_match:
+            mins = int(minutes_match.group(1))
+
+    if incident_type not in {"overrun", "late_start", "no_show"}:
         raise ValueError("Triage could not identify a supported overrun incident")
     if target_talk_id not in talk_ids:
         raise ValueError("Triage selected a talk that does not exist in the graph")
-    if incident_type == "overrun" and (
+    if incident_type in {"overrun", "late_start"} and (
         not isinstance(mins, int) or isinstance(mins, bool) or mins <= 0
     ):
-        raise ValueError("Triage must return a positive whole number of overrun minutes")
+        raise ValueError("Triage must return a positive whole number of delay minutes")
 
     incident = {"type": incident_type, "target_talk_id": target_talk_id}
-    if incident_type == "overrun":
+    if incident_type in {"overrun", "late_start"}:
         incident["mins"] = mins
     return incident
 
@@ -118,35 +186,38 @@ def _schedule_snapshot(g):
         "MATCH (talk:Talk) "
         "OPTIONAL MATCH (talk)-[:IN_ROOM]->(room:Room) "
         "OPTIONAL MATCH (talk)-[:IN_SESSION]->(session:Session) "
-        "RETURN talk.id, talk.start, talk.end, room.id, session.id"
+        "RETURN talk.id, talk.title, talk.start, talk.end, room.id, session.id"
     ).result_set:
         talk = talks.setdefault(row[0], {
             "id": row[0],
-            "start": row[1],
-            "end": row[2],
-            "room_id": row[3],
+            "title": row[1],
+            "start": row[2],
+            "end": row[3],
+            "room_id": row[4],
             "session_ids": set(),
         })
-        if row[3] is not None:
-            talk["room_id"] = row[3]
         if row[4] is not None:
-            talk["session_ids"].add(row[4])
+            talk["room_id"] = row[4]
+        if row[5] is not None:
+            talk["session_ids"].add(row[5])
 
     sessions = {}
     for row in g.query(
         "MATCH (session:Session) "
         "OPTIONAL MATCH (talk:Talk)-[:IN_SESSION]->(session) "
-        "RETURN session.id, session.start, session.end, session.subfield, talk.id"
+        "RETURN session.id, session.title, session.start, session.end, "
+        "session.subfield, talk.id"
     ).result_set:
         session = sessions.setdefault(row[0], {
             "id": row[0],
-            "start": row[1],
-            "end": row[2],
-            "subfield": row[3],
+            "title": row[1],
+            "start": row[2],
+            "end": row[3],
+            "subfield": row[4],
             "talk_ids": set(),
         })
-        if row[4] is not None:
-            session["talk_ids"].add(row[4])
+        if row[5] is not None:
+            session["talk_ids"].add(row[5])
 
     presenters = {}
     for row in g.query(
@@ -193,7 +264,12 @@ def _session_changes(talks, sessions, talk_changes):
             )
 
         if start != session["start"] or end != session["end"]:
-            changes.append({"session_id": session["id"], "start": start, "end": end})
+            changes.append({
+                "session_id": session["id"],
+                "session_title": session["title"],
+                "start": start,
+                "end": end,
+            })
     return changes
 
 
@@ -371,9 +447,9 @@ def _choose_schedule_candidate(g, incident, candidates, client):
     return candidate
 
 
-# Find a safe overrun schedule, using AI to choose a validated alternative when needed.
-def schedule_overrun(g, incident, client=None):
-    if incident["type"] != "overrun":
+# Find a safe timing plan, using AI only to choose among validated alternatives.
+def _schedule_timing_change(g, incident, client=None):
+    if incident["type"] not in {"overrun", "late_start"}:
         raise ValueError(f"Unsupported incident type: {incident['type']}")
 
     affected_talks = tools.overrun_cascade(
@@ -381,11 +457,16 @@ def schedule_overrun(g, incident, client=None):
         incident["target_talk_id"],
         incident["mins"],
     )
-    if not affected_talks:
-        raise ValueError("The overrun has no downstream talks to reschedule")
 
     talks, sessions, presenters, attendees = _schedule_snapshot(g)
-    base_changes = [
+    target_talk = talks[incident["target_talk_id"]]
+    is_late_start = incident["type"] == "late_start"
+    base_changes = [{
+        "talk_id": target_talk["id"],
+        "start": target_talk["start"] + (incident["mins"] if is_late_start else 0),
+        "end": target_talk["end"] + incident["mins"],
+        **({"status": "scheduled"} if is_late_start else {}),
+    }] + [
         {
             "talk_id": talk["id"],
             "start": talk["projected_start"],
@@ -425,12 +506,28 @@ def schedule_overrun(g, incident, client=None):
         staged_session_changes = base_session_changes
 
     fix_id = f"fix-{uuid4().hex}"
-    proposal = (
-        f"Delay {len(staged_changes)} talk(s) by "
-        f"{incident['mins']} minutes"
-        if selected_candidate is None
-        else f"Reschedule {len(staged_changes)} talk(s) to resolve the overrun conflicts"
+    following_count = len(staged_changes) - 1
+    following_label = (
+        f"{following_count} following talk"
+        f"{'s' if following_count != 1 else ''}"
     )
+    speaker_rows = g.query(
+        "MATCH (speaker:Person)-[:PRESENTS]->(talk:Talk {id: $talk_id}) "
+        "RETURN speaker.name ORDER BY speaker.name",
+        {"talk_id": target_talk["id"]},
+    ).result_set
+    speaker_label = f"{speaker_rows[0][0]}'s " if speaker_rows else ""
+    action = (
+        f"Delay {speaker_label}{target_talk['title']} by {incident['mins']} minutes and "
+        if is_late_start
+        else f"Extend {speaker_label}{target_talk['title']} by {incident['mins']} minutes and "
+    )
+    tail = (
+        f"reschedule {following_label} to avoid conflicts"
+        if selected_candidate
+        else f"shift {following_label}"
+    )
+    proposal = action + tail
     schema.make_node(
         g,
         "Fix",
@@ -465,6 +562,18 @@ def schedule_overrun(g, incident, client=None):
         "staged_session_changes": staged_session_changes,
         "selected_candidate_id": selected_candidate["id"] if selected_candidate else None,
     }
+
+
+def schedule_overrun(g, incident, client=None):
+    if incident["type"] != "overrun":
+        raise ValueError(f"Unsupported incident type: {incident['type']}")
+    return _schedule_timing_change(g, incident, client)
+
+
+def schedule_late_start(g, incident, client=None):
+    if incident["type"] != "late_start":
+        raise ValueError(f"Unsupported incident type: {incident['type']}")
+    return _schedule_timing_change(g, incident, client)
 
 
 # Propose the highest-ranked checked-in expert as a no-show speaker substitute.
@@ -611,7 +720,7 @@ def draft_notifications(g, fix, fix_id):
             )
         else:
             body = (
-                f"Draft: {proposed_changes} is proposed to move. "
+                f"Draft: {proposed_changes} is proposed to change. "
                 "The schedule will change only if the organizer approves the fix."
             )
         schema.make_node(
@@ -659,6 +768,8 @@ def run_pipeline(g, text, client=None):
     incident = record_incident(g, text, client)
     if incident["type"] == "overrun":
         fix = schedule_overrun(g, incident, client)
+    elif incident["type"] == "late_start":
+        fix = schedule_late_start(g, incident, client)
     elif incident["type"] == "no_show":
         fix = schedule_no_show(g, incident)
     else:

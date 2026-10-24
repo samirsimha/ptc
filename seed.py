@@ -111,6 +111,7 @@ def seed(g):
         ("Person", "person-lena", "CHAIRS", "Session", "session-neuro-a", {}),
         ("Person", "person-nina", "COAUTHORED", "Person", "person-omar", {}),
         ("Person", "person-omar", "EXPERT_IN", "Topic", "topic-neuro", {}),
+        ("Person", "person-kai", "EXPERT_IN", "Topic", "topic-systems", {}),
         ("Incident", "incident-maya-overrun", "AFFECTS", "Talk", "talk-early", {}),
         ("Incident", "incident-panel-overrun", "AFFECTS", "Talk", "talk-panel-first", {}),
         ("Catering", "catering-tour", "FOR", "SideEvent", "event-lab-tour", {}),

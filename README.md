@@ -10,8 +10,8 @@ set `OPENAI_API_KEY` in the environment, and run:
 ```
 
 On first run, populate the demo graph by sending `POST /reset`, then open
-`http://127.0.0.1:8000`. Use **Refresh** to reload the schedule. Submit an overrun or
-speaker no-show in the incident panel, review the proposed schedule/speaker
+`http://127.0.0.1:8000`. Use **Refresh** to reload the schedule. Submit a late start,
+overrun, or speaker no-show in the incident panel, review the proposed schedule/speaker
 change and draft notifications, then approve or reject it. Only approval
 applies the proposed change. The graph visualization at the bottom reflects
 the current conference graph.

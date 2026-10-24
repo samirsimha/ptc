@@ -138,7 +138,7 @@ class ScheduleAgentTests(unittest.TestCase):
         self.assertIn("passed schedule checks", result["note"])
         self.assertEqual(
             {notification["recipient"] for notification in result["notifications"]},
-            {"Jules Park", "Riley Chen"},
+            {"Maya Rivera", "Jules Park", "Riley Chen"},
         )
         self.assertTrue(all(
             notification["status"] == "draft"
@@ -167,7 +167,7 @@ class ScheduleAgentTests(unittest.TestCase):
 
         self.assertEqual(
             {notification["recipient"] for notification in notifications},
-            {"Jules Park", "Riley Chen"},
+            {"Maya Rivera", "Jules Park", "Riley Chen"},
         )
         rows = self.graph.query(
             "MATCH (agent:Agent {id: 'agent-comms'})-[:DRAFTED]->"
@@ -176,7 +176,10 @@ class ScheduleAgentTests(unittest.TestCase):
             "RETURN person.name, n.status, n.body ORDER BY person.name",
             {"fix_id": fix["id"]},
         ).result_set
-        self.assertEqual({row[0] for row in rows}, {"Jules Park", "Riley Chen"})
+        self.assertEqual(
+            {row[0] for row in rows},
+            {"Maya Rivera", "Jules Park", "Riley Chen"},
+        )
         self.assertTrue(all(row[1] == "draft" for row in rows))
         self.assertTrue(all("organizer approves" in row[2] for row in rows))
 
@@ -199,7 +202,10 @@ class ScheduleAgentTests(unittest.TestCase):
         self.assertEqual(fix["status"], "proposed")
         self.assertEqual(
             fix["staged_changes"],
-            [{"talk_id": "talk-followup", "start": 610, "end": 640}],
+            [
+                {"talk_id": "talk-keynote", "start": 570, "end": 610},
+                {"talk_id": "talk-followup", "start": 610, "end": 640},
+            ],
         )
         stored_fix = self.graph.query(
             "MATCH (f:Fix {id: $id})-[:RESOLVES]->(i:Incident) "

@@ -93,6 +93,12 @@ class FixDecisionTests(unittest.TestCase):
         self.assertEqual(response.json(), {"id": fix["id"], "status": "applied"})
         self.assertEqual(
             self.graph.query(
+                "MATCH (t:Talk {id: 'talk-keynote'}) RETURN t.start, t.end"
+            ).result_set,
+            [[570, 610]],
+        )
+        self.assertEqual(
+            self.graph.query(
                 "MATCH (t:Talk {id: 'talk-followup'}) RETURN t.start, t.end"
             ).result_set,
             [[610, 640]],
@@ -109,7 +115,7 @@ class FixDecisionTests(unittest.TestCase):
                 "RETURN collect(n.status)",
                 {"id": fix["id"]},
             ).result_set[0][0],
-            ["approved", "approved"],
+            ["approved", "approved", "approved"],
         )
 
     def test_reject_marks_fix_without_changing_schedule(self):
@@ -131,7 +137,7 @@ class FixDecisionTests(unittest.TestCase):
                 "RETURN collect(n.status)",
                 {"id": fix["id"]},
             ).result_set[0][0],
-            ["cancelled", "cancelled"],
+            ["cancelled", "cancelled", "cancelled"],
         )
 
     def test_explain_returns_agent_fix_incident_and_talk_path(self):
@@ -146,6 +152,7 @@ class FixDecisionTests(unittest.TestCase):
         self.assertEqual(explanation["incident"]["type"], "overrun")
         self.assertEqual(explanation["affected_talk"]["id"], "talk-keynote")
         self.assertEqual(explanation["proposed_talks"], [
+            {"id": "talk-keynote", "title": "The Future of AI"},
             {"id": "talk-followup", "title": "AI in the Real World"},
         ])
 
