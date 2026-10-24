@@ -1,6 +1,9 @@
 import json
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from falkordb import FalkorDB
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAIError
@@ -10,6 +13,8 @@ import agents
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+WEB_DIR = Path(__file__).parent / "web"
+app.mount("/web", StaticFiles(directory=WEB_DIR), name="web")
 
 db = FalkorDB(host="localhost", port=6379)
 g = db.select_graph("conf")
@@ -23,6 +28,12 @@ class IncidentRequest(BaseModel):
 def run_cypher(q, params=None):
     return g.query(q, params or {}).result_set
 
+
+@app.get("/", include_in_schema=False)
+def get_dashboard():
+    return FileResponse(WEB_DIR / "index.html")
+
+
 # test endpoint: return every node
 @app.get("/graph")
 def get_graph():
@@ -32,6 +43,38 @@ def get_graph():
         "nodes": [{"id": n[0], "label": n[1], "props": n[2]} for n in nodes],
         "links": [{"source": e[0], "target": e[1], "type": e[2]} for e in edges],
     }
+
+
+@app.get("/schedule")
+def get_schedule():
+    rows = run_cypher(
+        "MATCH (room:Room)<-[:IN_ROOM]-(talk:Talk) "
+        "OPTIONAL MATCH (speaker:Person)-[:PRESENTS]->(talk) "
+        "OPTIONAL MATCH (talk)-[:IN_SESSION]->(session:Session) "
+        "RETURN room.id, room.name, talk.id, talk.title, talk.start, talk.end, "
+        "talk.status, speaker.id, speaker.name, session.id, session.title "
+        "ORDER BY room.name, talk.start"
+    )
+    rooms = {}
+    for row in rows:
+        room = rooms.setdefault(row[0], {
+            "id": row[0],
+            "name": row[1],
+            "talks": [],
+        })
+        room["talks"].append({
+            "id": row[2],
+            "title": row[3],
+            "start": row[4],
+            "end": row[5],
+            "status": row[6],
+            "speaker_id": row[7],
+            "speaker": row[8],
+            "session_id": row[9],
+            "session": row[10],
+        })
+    return sorted(rooms.values(), key=lambda room: room["name"])
+
 
 @app.get("/fixes")
 def get_fixes():

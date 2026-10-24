@@ -64,6 +64,26 @@ class FixDecisionTests(unittest.TestCase):
             }),
         )["fix"]
 
+    def test_dashboard_and_schedule_are_served_from_the_api(self):
+        page = self.client.get("/")
+        schedule = self.client.get("/schedule")
+        script = self.client.get("/web/app.js")
+
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("Blast Radius", page.text)
+        self.assertEqual(schedule.status_code, 200)
+        rooms = schedule.json()
+        self.assertEqual(
+            {room["name"] for room in rooms},
+            {"West Hall", "West Workshop", "East Hall", "East Lab"},
+        )
+        all_talks = [talk for room in rooms for talk in room["talks"]]
+        self.assertEqual(len(all_talks), 10)
+        no_show_talk = next(talk for talk in all_talks if talk["id"] == "talk-noshow")
+        self.assertEqual(no_show_talk["speaker"], "Nina Patel")
+        self.assertEqual(script.status_code, 200)
+        self.assertIn("loadDashboard", script.text)
+
     def test_approve_applies_staged_talk_and_session_times(self):
         fix = self.create_fix()
 

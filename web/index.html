@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0b1020">
+    <title>Blast Radius — Conference Operations</title>
+    <link rel="stylesheet" href="/web/styles.css">
+    <script src="/web/app.js" defer></script>
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Blast Radius home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>BLAST<span class="brand-light">RADIUS</span></span>
+      </a>
+      <div class="topbar-right">
+        <span class="live-indicator"><span></span> LIVE OPERATIONS</span>
+        <span class="topbar-divider"></span>
+        <span class="event-label">NORTHSTAR TECH SUMMIT <span>·</span> DAY 01</span>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="eyebrow-line"></span> CONFERENCE CONTROL ROOM</p>
+          <h1>Every moving part,<br><span>in one place.</span></h1>
+          <p class="hero-description">
+            Watch the day unfold. When plans change, let the system find a safe fix—
+            you stay in control of what gets applied.
+          </p>
+        </div>
+        <div class="hero-aside">
+          <div class="date-chip"><span class="date-dot"></span> LIVE SCHEDULE</div>
+          <div class="hero-aside-line"></div>
+          <p>One conference.<br><strong>Zero surprises.</strong></p>
+        </div>
+      </section>
+
+      <section class="metrics" aria-label="Conference overview">
+        <article class="metric-card">
+          <span class="metric-icon icon-cyan">◷</span>
+          <div><span class="metric-label">SCHEDULED TALKS</span><strong id="talk-count">—</strong></div>
+          <span class="metric-note">across all rooms</span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-icon icon-violet">⌂</span>
+          <div><span class="metric-label">ACTIVE ROOMS</span><strong id="room-count">—</strong></div>
+          <span class="metric-note">all tracks</span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-icon icon-amber">◎</span>
+          <div><span class="metric-label">PENDING DECISIONS</span><strong id="pending-count">—</strong></div>
+          <span class="metric-note">awaiting your review</span>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">01 <span>/</span> THE FLOOR</p>
+            <h2>Today’s schedule</h2>
+          </div>
+          <button class="quiet-button" id="refresh-button" type="button">
+            <span aria-hidden="true">↻</span> Refresh
+          </button>
+        </div>
+
+        <div class="schedule-layout">
+          <section class="schedule-panel panel">
+            <div class="panel-heading">
+              <div>
+                <h3>Room-by-room</h3>
+                <p>Every talk, in time order</p>
+              </div>
+              <span class="panel-status"><span></span> SCHEDULE LIVE</span>
+            </div>
+            <div id="schedule-content" class="schedule-content" aria-live="polite">
+              <div class="loading-state"><span class="spinner"></span> Loading the floor plan…</div>
+            </div>
+          </section>
+
+          <section class="incident-panel panel">
+            <div class="incident-heading">
+              <div class="incident-icon" aria-hidden="true">✳</div>
+              <div>
+                <p class="eyebrow">02 <span>/</span> INCIDENT RESPONSE</p>
+                <h3>Something changed?</h3>
+              </div>
+            </div>
+            <p class="incident-intro">
+              Tell us what happened. We’ll check the impact and prepare a fix for your approval.
+            </p>
+            <form id="incident-form">
+              <label for="incident-text">WHAT’S GOING ON?</label>
+              <textarea
+                id="incident-text"
+                name="text"
+                rows="4"
+                maxlength="1000"
+                placeholder="e.g. The keynote ran 10 minutes over…"
+                required
+              ></textarea>
+              <div class="input-meta"><span>Describe an overrun or speaker no-show.</span><span id="char-count">0 / 1000</span></div>
+              <div class="example-prompts">
+                <button type="button" data-example="The keynote went 10 minutes over">Keynote overrun</button>
+                <button type="button" data-example="The speaker for Neural Signals in Practice did not show up">Speaker no-show</button>
+              </div>
+              <button class="primary-button submit-button" id="submit-incident" type="submit">
+                <span>Analyze incident</span><span aria-hidden="true">↗</span>
+              </button>
+              <p class="form-error" id="form-error" role="alert" hidden></p>
+            </form>
+
+            <section class="review-card" id="review-card" aria-live="polite" hidden>
+              <div class="review-topline">
+                <span class="review-label"><span class="review-dot"></span> PROPOSED FIX</span>
+                <span class="review-pending" id="review-status">NEEDS YOUR OK</span>
+              </div>
+              <h4 id="fix-title"></h4>
+              <div id="fix-details" class="fix-details"></div>
+              <div class="notification-list" id="notification-list"></div>
+              <div class="decision-actions" id="decision-actions">
+                <button class="reject-button" id="reject-fix" type="button">No, reject</button>
+                <button class="approve-button" id="approve-fix" type="button">Yes, apply fix <span aria-hidden="true">✓</span></button>
+              </div>
+              <p class="decision-note" id="decision-note">Nothing changes until you approve this proposal.</p>
+            </section>
+          </section>
+        </div>
+      </section>
+
+      <section class="graph-section">
+        <div class="section-heading graph-heading">
+          <div>
+            <p class="eyebrow">03 <span>/</span> UNDER THE HOOD</p>
+            <h2>The conference graph</h2>
+          </div>
+          <div class="graph-key">
+            <span><i class="key-dot key-talk"></i> Talks</span>
+            <span><i class="key-dot key-people"></i> People</span>
+            <span><i class="key-dot key-ops"></i> Operations</span>
+          </div>
+        </div>
+        <div class="graph-panel panel">
+          <div class="graph-toolbar">
+            <div>
+              <strong>Connected event map</strong>
+              <span id="graph-summary">Loading nodes and relationships…</span>
+            </div>
+            <span class="graph-live"><span></span> GRAPH DATA</span>
+          </div>
+          <div class="graph-viewport" id="graph-viewport">
+            <div class="loading-state"><span class="spinner"></span> Mapping the conference…</div>
+          </div>
+          <p class="graph-footnote">People with attendee-only RSVP records are grouped out here to keep the operational relationships legible.</p>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <a class="brand footer-brand" href="/">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>BLAST<span class="brand-light">RADIUS</span></span>
+        </a>
+        <span>BUILT FOR THE MOMENTS BETWEEN THE TALKS.</span>
+        <span class="footer-version">OPS CONSOLE <span>·</span> 01</span>
+      </footer>
+    </main>
+  </body>
+</html>
