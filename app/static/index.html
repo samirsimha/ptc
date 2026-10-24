@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blast Radius · Conference Ops</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">✳</span><div><strong>BLAST RADIUS</strong><small>CONFERENCE OPERATIONS</small></div></div>
+    <div class="top-actions"><span id="db-status" class="status"><i></i> Connecting</span><button id="preflight-btn" class="subtle">Pre-flight scan</button><button id="reset-btn" class="subtle danger">Reset demo</button></div>
+  </header>
+  <main>
+    <section class="hero">
+      <div><p class="eyebrow">LIVE OPERATIONS / HUMAN IN CONTROL</p><h1>See the whole <em>blast radius.</em></h1><p class="lead">Trace conference failures through the graph. Review rule-checked fixes. Tell everyone affected.</p></div>
+      <div class="stats"><div><strong id="incident-count">0</strong><span>incidents</span></div><div><strong id="fix-count">0</strong><span>proposals</span></div><div><strong id="draft-count">0</strong><span>drafts</span></div></div>
+    </section>
+    <section class="input-card">
+      <label for="incident-input">What happened?</label>
+      <div class="input-row"><input id="incident-input" placeholder="e.g. Keynote running 20 minutes over…" autocomplete="off"><button id="submit-btn" class="primary">Trace incident <span>↗</span></button></div>
+      <div class="examples"><span>TRY A SCENARIO</span><button data-example="Keynote running 20 minutes over">20 min overrun</button><button data-example="Dr. Mira Solis didn't show">Speaker no-show</button><button data-example="Power is out in the east wing">East wing outage</button><button data-example="Lab tour just opened to 300 RSVPs">Oversold tour</button><button data-example="Panel first speaker ran 25 minutes over">Panel time debt</button></div>
+    </section>
+    <div id="message" role="status" aria-live="polite"></div>
+    <section class="workspace">
+      <div class="graph-card card">
+        <div class="card-head"><div><p class="eyebrow">SHARED STATE</p><h2>Incident graph</h2></div><div class="legend"><span><i class="red"></i> Active</span><span><i class="orange"></i> Projected / affected</span><span><i class="resolved"></i> Resolved</span><span><i class="green"></i> Fix</span></div></div>
+        <div id="graph" aria-label="Interactive incident graph"></div>
+        <div class="graph-footer"><span>Click a proposal to show its explanation path</span><a href="http://localhost:3000" target="_blank" rel="noopener">FalkorDB browser ↗</a></div>
+      </div>
+      <aside class="side">
+        <section class="card incident-card"><div class="card-head"><div><p class="eyebrow">CHRONOLOGY</p><h2>Incidents</h2></div></div><div id="incidents" class="scroll-list empty">No incidents yet. Try a scenario above.</div></section>
+        <section class="card fix-card"><div class="card-head"><div><p class="eyebrow">HUMAN APPROVAL</p><h2>Proposed fixes</h2></div><span id="proposal-pill" class="pill">0 open</span></div><div id="fixes" class="scroll-list empty">Fixes will appear after an incident is traced.</div></section>
+      </aside>
+    </section>
+    <section class="lower">
+      <section class="card"><div class="card-head"><div><p class="eyebrow">WHY THIS FIX</p><h2>Explanation path</h2></div></div><div id="explain" class="explain empty">Select a fix to inspect the graph path and any rejected rule.</div></section>
+      <section class="card"><div class="card-head"><div><p class="eyebrow">AFFECTED PEOPLE ONLY</p><h2>Notification drafts</h2></div><span id="notice-pill" class="pill">0 drafts</span></div><div id="notifications" class="notification-list empty">Drafts appear for presenters and attendees whose plans change.</div></section>
+    </section>
+    <section id="preflight" class="card preflight" hidden><div class="card-head"><div><p class="eyebrow">BEFORE DOORS OPEN</p><h2>Pre-flight findings</h2></div><button id="close-preflight" class="subtle">Close</button></div><div id="preflight-content"></div></section>
+  </main>
+  <script src="/static/vis-network.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

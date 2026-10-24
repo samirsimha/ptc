@@ -13,11 +13,12 @@ NODES = {
     "Fix":          ["id", "proposal", "status"],
     "Notification": ["id", "body", "status"],
     "Agent":        ["id", "name"],
+    "AgentRun":     ["id", "agent", "incident_id", "summary", "ts"],
 }
  
 # edge type -> (allowed from labels, allowed to labels; None = any)
 RELS = {
-    "IN_ROOM":    ({"Talk"}, {"Room"}),
+    "IN_ROOM":    ({"Talk", "Session"}, {"Room"}),
     "IN_SESSION": ({"Talk"}, {"Session"}),            # prop: order
     "NEXT_IN":    ({"Talk"}, {"Talk"}),               # room running order
     "PRESENTS":   ({"Person"}, {"Talk"}),
@@ -25,6 +26,7 @@ RELS = {
     "ABOUT":      ({"Talk"}, {"Topic"}),
     "EXPERT_IN":  ({"Person"}, {"Topic"}),
     "COAUTHORED": ({"Person"}, {"Person"}),           # create one way, query with -[]-
+    "SUBSTITUTED_FOR": ({"Person"}, {"Person"}),
     "RSVP":       ({"Person"}, {"Talk", "SideEvent"}),
     "FOR":        ({"Catering"}, {"SideEvent", "Room"}),
     "WALK":       ({"Room"}, {"Room"}),               # P2, props: mins, stairs
@@ -33,16 +35,20 @@ RELS = {
     "CAUSED":     ({"Incident"}, {"Incident"}),       # the cascade
     "RESOLVES":   ({"Fix"}, {"Incident"}),
     "PROPOSED":   ({"Agent"}, {"Fix"}),
-    "DRAFTED":    ({"Agent"}, {"Notification"}),
+    "DRAFTED":    ({"Agent", "Incident"}, {"Notification"}),
     "TO":         ({"Notification"}, {"Person"}),
+    "HAS_DRAFT":  ({"Fix"}, {"Notification"}),
+    "RAN":        ({"Agent"}, {"AgentRun"}),
+    "REVIEWS":    ({"AgentRun"}, {"Incident"}),
 }
  
-# fixer rule names (Fix.rejected_rule must be one of these)
+# fixer rule descriptions used by the coordinator
 RULES = {
     "SAME_SUBFIELD_OVERLAP": "Two same-subfield sessions can't overlap",
     "MIN_BREAK":             "Breaks can't drop below 15 min",
     "LATE_DAY_CONCURRENCY":  "Fewer parallel sessions after 16:00",
     "JUNIOR_LAST_SLOT":      "Don't put junior presenters in the last slot",
+    "RSVP_CLASH":            "A schedule change must handle newly overlapping live RSVPs",
 }
  
  

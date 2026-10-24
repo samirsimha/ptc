@@ -1,0 +1,26 @@
+services:
+  falkordb:
+    image: falkordb/falkordb-server:latest
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - falkordb_data:/var/lib/falkordb/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+  browser:
+    image: falkordb/falkordb-browser:latest
+    profiles: ["browser"]
+    depends_on:
+      falkordb:
+        condition: service_healthy
+    environment:
+      FALKORDB_URL: redis://falkordb:6379
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  falkordb_data:
