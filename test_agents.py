@@ -66,6 +66,59 @@ class ScheduleAgentTests(unittest.TestCase):
                 }),
             )
 
+    def test_triage_identifies_a_no_show_without_overrun_minutes(self):
+        incident = agents.parse_incident(
+            self.graph,
+            "The speaker for Neural Signals in Practice did not show up",
+            stub_model_client({
+                "incident_type": "no_show",
+                "target_talk_id": "talk-noshow",
+            }),
+        )
+
+        self.assertEqual(
+            incident,
+            {"type": "no_show", "target_talk_id": "talk-noshow"},
+        )
+
+    def test_no_show_pipeline_stages_substitute_and_drafts_notifications(self):
+        result = agents.run_pipeline(
+            self.graph,
+            "The speaker for Neural Signals in Practice did not show up",
+            stub_model_client({
+                "incident_type": "no_show",
+                "target_talk_id": "talk-noshow",
+            }),
+        )
+
+        self.assertEqual(result["incident"]["type"], "no_show")
+        self.assertEqual(
+            result["fix"]["presenter_change"],
+            {
+                "talk_id": "talk-noshow",
+                "from_person_id": "person-nina",
+                "from_person": "Nina Patel",
+                "to_person_id": "person-omar",
+                "to_person": "Omar Chen",
+            },
+        )
+        self.assertTrue(result["fix"]["substitute_is_coauthor"])
+        self.assertEqual(
+            {notification["recipient"] for notification in result["notifications"]},
+            {"Nina Patel", "Omar Chen"},
+        )
+        self.assertTrue(all(
+            "proposed to change from Nina Patel to Omar Chen" in notification["body"]
+            for notification in result["notifications"]
+        ))
+        self.assertEqual(
+            self.graph.query(
+                "MATCH (p:Person)-[:PRESENTS]->(:Talk {id: 'talk-noshow'}) "
+                "RETURN p.id"
+            ).result_set,
+            [["person-nina"]],
+        )
+
     def test_pipeline_records_incident_and_stages_fix(self):
         original_times = self.graph.query(
             "MATCH (t:Talk {id: 'talk-followup'}) RETURN t.start, t.end"

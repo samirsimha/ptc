@@ -37,10 +37,11 @@ def parse_incident(g, text, client=None):
                 "role": "system",
                 "content": (
                     "You are the conference incident triage agent. Return a JSON object "
-                    "with incident_type, target_talk_id, and mins. Supported incident_type "
-                    "is only 'overrun'. Use a talk id exactly as provided. For an overrun, "
-                    "mins must be the positive number of minutes. If the text does not "
-                    "clearly describe a supported incident involving one listed talk, "
+                    "with incident_type and target_talk_id. Supported incident_type values "
+                    "are 'overrun' and 'no_show'. Use a talk id exactly as provided. For an "
+                    "overrun, also return mins as a positive whole number. A no-show does "
+                    "not need mins. If the text does not clearly describe a supported "
+                    "incident involving one listed talk, "
                     "return {\"incident_type\":\"unsupported\"}."
                 ),
             },
@@ -65,18 +66,20 @@ def parse_incident(g, text, client=None):
     target_talk_id = parsed.get("target_talk_id")
     mins = parsed.get("mins")
     talk_ids = {talk["id"] for talk in available_talks}
-    if parsed.get("incident_type") != "overrun":
+    incident_type = parsed.get("incident_type")
+    if incident_type not in {"overrun", "no_show"}:
         raise ValueError("Triage could not identify a supported overrun incident")
     if target_talk_id not in talk_ids:
         raise ValueError("Triage selected a talk that does not exist in the graph")
-    if not isinstance(mins, int) or isinstance(mins, bool) or mins <= 0:
+    if incident_type == "overrun" and (
+        not isinstance(mins, int) or isinstance(mins, bool) or mins <= 0
+    ):
         raise ValueError("Triage must return a positive whole number of overrun minutes")
 
-    return {
-        "type": "overrun",
-        "target_talk_id": target_talk_id,
-        "mins": mins,
-    }
+    incident = {"type": incident_type, "target_talk_id": target_talk_id}
+    if incident_type == "overrun":
+        incident["mins"] = mins
+    return incident
 
 # uses output from parse_incident to find the talk_id and create an incident node in graph
 def record_incident(g, text, client=None):
@@ -436,6 +439,7 @@ def schedule_overrun(g, incident, client=None):
         status="proposed",
         staged_changes=json.dumps(staged_changes),
         staged_session_changes=json.dumps(staged_session_changes),
+        staged_presenter_change=json.dumps(None),
     )
     schema.link(
         g,
@@ -460,6 +464,68 @@ def schedule_overrun(g, incident, client=None):
         "staged_changes": staged_changes,
         "staged_session_changes": staged_session_changes,
         "selected_candidate_id": selected_candidate["id"] if selected_candidate else None,
+    }
+
+
+# Propose the highest-ranked checked-in expert as a no-show speaker substitute.
+def schedule_no_show(g, incident):
+    if incident["type"] != "no_show":
+        raise ValueError(f"Unsupported incident type: {incident['type']}")
+
+    talk_id = incident["target_talk_id"]
+    speaker_rows = g.query(
+        "MATCH (speaker:Person)-[:PRESENTS]->(talk:Talk {id: $talk_id}) "
+        "RETURN speaker.id, speaker.name",
+        {"talk_id": talk_id},
+    ).result_set
+    if not speaker_rows:
+        raise ValueError(f"No scheduled presenter found for talk: {talk_id}")
+
+    substitutes = tools.find_substitutes(g, talk_id)
+    if not substitutes:
+        raise ValueError(f"No checked-in, available expert found for talk: {talk_id}")
+
+    original_speaker_id, original_speaker_name = speaker_rows[0]
+    substitute = substitutes[0]
+    if substitute["id"] == original_speaker_id:
+        raise ValueError("The scheduled speaker cannot substitute for themself")
+
+    talk_rows = g.query(
+        "MATCH (talk:Talk {id: $talk_id}) RETURN talk.title",
+        {"talk_id": talk_id},
+    ).result_set
+    fix_id = f"fix-{uuid4().hex}"
+    presenter_change = {
+        "talk_id": talk_id,
+        "from_person_id": original_speaker_id,
+        "from_person": original_speaker_name,
+        "to_person_id": substitute["id"],
+        "to_person": substitute["name"],
+    }
+    proposal = (
+        f"Replace absent speaker {original_speaker_name} with "
+        f"{substitute['name']} for {talk_rows[0][0]}"
+    )
+    schema.make_node(
+        g,
+        "Fix",
+        id=fix_id,
+        proposal=proposal,
+        status="proposed",
+        staged_changes=json.dumps([]),
+        staged_session_changes=json.dumps([]),
+        staged_presenter_change=json.dumps(presenter_change),
+    )
+    schema.link(g, "Fix", fix_id, "RESOLVES", "Incident", incident["incident_id"])
+    schema.link(g, "Agent", "agent-schedule", "PROPOSED", "Fix", fix_id)
+    return {
+        "id": fix_id,
+        "proposal": proposal,
+        "status": "proposed",
+        "staged_changes": [],
+        "staged_session_changes": [],
+        "presenter_change": presenter_change,
+        "substitute_is_coauthor": substitute["is_coauthor"],
     }
 
 
@@ -490,6 +556,7 @@ def draft_notifications(g, fix, fix_id):
                 recipient = recipients.setdefault(person_id, {
                     "name": person_name,
                     "changes": {},
+                    "presenter_change": None,
                 })
                 recipient["changes"][talk_id] = {
                     "title": talk_title,
@@ -497,19 +564,56 @@ def draft_notifications(g, fix, fix_id):
                     "end": change["end"],
                 }
 
+    presenter_change = fix.get("presenter_change")
+    if presenter_change:
+        talk_rows = g.query(
+            "MATCH (t:Talk {id: $talk_id}) RETURN t.title",
+            {"talk_id": presenter_change["talk_id"]},
+        ).result_set
+        talk_title = talk_rows[0][0]
+        for person_id, person_name in (
+            (presenter_change["from_person_id"], presenter_change["from_person"]),
+            (presenter_change["to_person_id"], presenter_change["to_person"]),
+        ):
+            recipient = recipients.setdefault(person_id, {
+                "name": person_name,
+                "changes": {},
+                "presenter_change": None,
+            })
+            recipient["presenter_change"] = {
+                "talk_title": talk_title,
+                "from_person": presenter_change["from_person"],
+                "to_person": presenter_change["to_person"],
+            }
+
     notifications = []
     for person_id, recipient in recipients.items():
-        moved_talks = ", ".join(
+        messages = [
             f"{change['title']} to {change['start'] // 60:02d}:"
             f"{change['start'] % 60:02d}–{change['end'] // 60:02d}:"
             f"{change['end'] % 60:02d}"
             for change in recipient["changes"].values()
-        )
+        ]
+        speaker_change = recipient.get("presenter_change")
+        if speaker_change:
+            messages.append(
+                f"the presenter for {speaker_change['talk_title']} from "
+                f"{speaker_change['from_person']} to {speaker_change['to_person']}"
+            )
+        proposed_changes = " and ".join(messages)
         notification_id = f"notification-{uuid4().hex}"
-        body = (
-            f"Draft: {moved_talks} is proposed to move. "
-            "The schedule will change only if the organizer approves the fix."
-        )
+        if speaker_change:
+            body = (
+                f"Draft: The presenter for {speaker_change['talk_title']} is proposed "
+                f"to change from {speaker_change['from_person']} to "
+                f"{speaker_change['to_person']}. The assignment will change only if "
+                "the organizer approves the fix."
+            )
+        else:
+            body = (
+                f"Draft: {proposed_changes} is proposed to move. "
+                "The schedule will change only if the organizer approves the fix."
+            )
         schema.make_node(
             g,
             "Notification",
@@ -553,7 +657,12 @@ def draft_notifications(g, fix, fix_id):
 # runs Triage and Schedule agents in order and returns the incident and proposed fix
 def run_pipeline(g, text, client=None):
     incident = record_incident(g, text, client)
-    fix = schedule_overrun(g, incident, client)
+    if incident["type"] == "overrun":
+        fix = schedule_overrun(g, incident, client)
+    elif incident["type"] == "no_show":
+        fix = schedule_no_show(g, incident)
+    else:
+        raise ValueError(f"Unsupported incident type: {incident['type']}")
     notifications = draft_notifications(g, fix, fix["id"])
     return {
         "incident": incident,

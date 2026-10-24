@@ -11,18 +11,16 @@ import schema
 import seed
 
 
-def triage_client():
-    response = SimpleNamespace(
-        choices=[
-            SimpleNamespace(
-                message=SimpleNamespace(content=json.dumps({
-                    "incident_type": "overrun",
-                    "target_talk_id": "talk-keynote",
-                    "mins": 10,
-                })),
-            ),
-        ],
-    )
+def triage_client(payload=None):
+    if payload is None:
+        payload = {
+            "incident_type": "overrun",
+            "target_talk_id": "talk-keynote",
+            "mins": 10,
+        }
+    response = SimpleNamespace(choices=[
+        SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload))),
+    ])
     return SimpleNamespace(
         chat=SimpleNamespace(
             completions=SimpleNamespace(
@@ -54,6 +52,16 @@ class FixDecisionTests(unittest.TestCase):
             self.graph,
             "The keynote went 10 minutes over",
             triage_client(),
+        )["fix"]
+
+    def create_no_show_fix(self):
+        return agents.run_pipeline(
+            self.graph,
+            "The speaker for Neural Signals in Practice did not show up",
+            triage_client({
+                "incident_type": "no_show",
+                "target_talk_id": "talk-noshow",
+            }),
         )["fix"]
 
     def test_approve_applies_staged_talk_and_session_times(self):
@@ -164,6 +172,73 @@ class FixDecisionTests(unittest.TestCase):
                 "MATCH (t:Talk {id: 'talk-followup'}) RETURN t.start, t.end"
             ).result_set,
             [[600, 630]],
+        )
+
+    def test_approve_applies_staged_no_show_presenter_swap(self):
+        fix = self.create_no_show_fix()
+
+        explanation = self.client.get(f"/fixes/{fix['id']}/explain")
+        self.assertEqual(explanation.status_code, 200, explanation.text)
+        self.assertEqual(
+            explanation.json()["presenter_change"]["to_person_id"],
+            "person-omar",
+        )
+
+        response = self.client.post(f"/fixes/{fix['id']}/approve")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            self.graph.query(
+                "MATCH (p:Person)-[:PRESENTS]->(:Talk {id: 'talk-noshow'}) "
+                "RETURN p.id"
+            ).result_set,
+            [["person-omar"]],
+        )
+        self.assertEqual(
+            self.graph.query(
+                "MATCH (:Fix {id: $id})-[:HAS_NOTIFICATION]->"
+                "(n:Notification)-[:TO]->(person:Person) "
+                "RETURN person.name, n.status ORDER BY person.name",
+                {"id": fix["id"]},
+            ).result_set,
+            [["Nina Patel", "approved"], ["Omar Chen", "approved"]],
+        )
+
+    def test_reject_no_show_leaves_original_presenter_assigned(self):
+        fix = self.create_no_show_fix()
+
+        response = self.client.post(f"/fixes/{fix['id']}/reject")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            self.graph.query(
+                "MATCH (p:Person)-[:PRESENTS]->(:Talk {id: 'talk-noshow'}) "
+                "RETURN p.id"
+            ).result_set,
+            [["person-nina"]],
+        )
+
+    def test_approve_rechecks_substitute_availability(self):
+        fix = self.create_no_show_fix()
+        schema.link(
+            self.graph,
+            "Person",
+            "person-omar",
+            "PRESENTS",
+            "Talk",
+            "talk-neuro-overlap",
+        )
+
+        response = self.client.post(f"/fixes/{fix['id']}/approve")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("substitute has an overlapping talk", response.json()["detail"])
+        self.assertEqual(
+            self.graph.query(
+                "MATCH (p:Person)-[:PRESENTS]->(:Talk {id: 'talk-noshow'}) "
+                "RETURN p.id"
+            ).result_set,
+            [["person-nina"]],
         )
 
 

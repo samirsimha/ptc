@@ -84,7 +84,8 @@ def create_incident(request: IncidentRequest):
 def _get_proposed_fix(fix_id):
     rows = run_cypher(
         "MATCH (f:Fix {id: $id}) "
-        "RETURN f.status, f.staged_changes, f.staged_session_changes",
+        "RETURN f.status, f.staged_changes, f.staged_session_changes, "
+        "f.staged_presenter_change",
         {"id": fix_id},
     )
     if not rows:
@@ -95,16 +96,21 @@ def _get_proposed_fix(fix_id):
     try:
         talk_changes = json.loads(rows[0][1])
         session_changes = json.loads(rows[0][2] or "[]")
+        presenter_change = json.loads(rows[0][3] or "null")
     except (TypeError, json.JSONDecodeError) as error:
         raise HTTPException(status_code=409, detail="Fix has invalid staged changes") from error
 
-    if not isinstance(talk_changes, list) or not isinstance(session_changes, list):
+    if (
+        not isinstance(talk_changes, list)
+        or not isinstance(session_changes, list)
+        or (presenter_change is not None and not isinstance(presenter_change, dict))
+    ):
         raise HTTPException(status_code=409, detail="Fix has invalid staged changes")
-    return talk_changes, session_changes
+    return talk_changes, session_changes, presenter_change
 
 
 # Validate the stored schedule changes before changing any Talk or Session nodes.
-def _validate_staged_changes(talk_changes, session_changes):
+def _validate_staged_changes(talk_changes, session_changes, presenter_change):
     for change in talk_changes:
         if (
             not isinstance(change, dict)
@@ -139,7 +145,60 @@ def _validate_staged_changes(talk_changes, session_changes):
         ):
             raise HTTPException(status_code=409, detail="Fix references a missing session")
 
+    if presenter_change is not None:
+        required_ids = ("talk_id", "from_person_id", "to_person_id")
+        if any(not isinstance(presenter_change.get(key), str) for key in required_ids):
+            raise HTTPException(status_code=409, detail="Fix contains an invalid presenter change")
+        if presenter_change["from_person_id"] == presenter_change["to_person_id"]:
+            raise HTTPException(status_code=409, detail="Fix has the same current and proposed presenter")
+        current_presenter = run_cypher(
+            "MATCH (p:Person {id: $person_id})-[:PRESENTS]->"
+            "(t:Talk {id: $talk_id}) RETURN p.id",
+            {
+                "person_id": presenter_change["from_person_id"],
+                "talk_id": presenter_change["talk_id"],
+            },
+        )
+        substitute = run_cypher(
+            "MATCH (p:Person {id: $person_id}) "
+            "RETURN p.id, p.checked_in",
+            {"person_id": presenter_change["to_person_id"]},
+        )
+        if not current_presenter:
+            raise HTTPException(status_code=409, detail="Fix's original presenter assignment changed")
+        if not substitute or substitute[0][1] is not True:
+            raise HTTPException(status_code=409, detail="Fix's substitute is missing or not checked in")
+
     talks, sessions, presenters, attendees = agents._schedule_snapshot(g)
+    if presenter_change is not None:
+        talk_id = presenter_change["talk_id"]
+        substitute_id = presenter_change["to_person_id"]
+        if talk_id in presenters.get(substitute_id, set()):
+            raise HTTPException(
+                status_code=409,
+                detail="Fix's substitute is already assigned to the affected talk",
+            )
+        proposed_times = {
+            change["talk_id"]: (change["start"], change["end"])
+            for change in talk_changes
+        }
+        target = talks[talk_id]
+        target_start, target_end = proposed_times.get(
+            talk_id,
+            (target["start"], target["end"]),
+        )
+        for other_talk_id in presenters.get(substitute_id, set()):
+            other = talks[other_talk_id]
+            other_start, other_end = proposed_times.get(
+                other_talk_id,
+                (other["start"], other["end"]),
+            )
+            if target_start < other_end and target_end > other_start:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Fix is no longer safe to apply: substitute has an overlapping talk",
+                )
+
     conflicts = agents._schedule_conflicts(
         talks,
         sessions,
@@ -157,8 +216,8 @@ def _validate_staged_changes(talk_changes, session_changes):
 
 @app.post("/fixes/{fix_id}/approve")
 def approve_fix(fix_id: str):
-    talk_changes, session_changes = _get_proposed_fix(fix_id)
-    _validate_staged_changes(talk_changes, session_changes)
+    talk_changes, session_changes, presenter_change = _get_proposed_fix(fix_id)
+    _validate_staged_changes(talk_changes, session_changes, presenter_change)
 
     for change in talk_changes:
         run_cypher(
@@ -178,6 +237,23 @@ def approve_fix(fix_id: str):
                 "id": change["session_id"],
                 "start": change["start"],
                 "end": change["end"],
+            },
+        )
+    if presenter_change is not None:
+        run_cypher(
+            "MATCH (old:Person {id: $from_id})-[r:PRESENTS]->"
+            "(talk:Talk {id: $talk_id}) DELETE r",
+            {
+                "from_id": presenter_change["from_person_id"],
+                "talk_id": presenter_change["talk_id"],
+            },
+        )
+        run_cypher(
+            "MATCH (new:Person {id: $to_id}), (talk:Talk {id: $talk_id}) "
+            "CREATE (new)-[:PRESENTS]->(talk)",
+            {
+                "to_id": presenter_change["to_person_id"],
+                "talk_id": presenter_change["talk_id"],
             },
         )
     run_cypher(
@@ -213,7 +289,8 @@ def explain_fix(fix_id: str):
         "MATCH (agent:Agent)-[:PROPOSED]->(f:Fix {id: $id})"
         "-[:RESOLVES]->(incident:Incident)-[:AFFECTS]->(root:Talk) "
         "RETURN agent.name, f.id, f.proposal, f.status, incident.id, "
-        "incident.type, incident.desc, root.id, root.title, f.staged_changes",
+        "incident.type, incident.desc, root.id, root.title, f.staged_changes, "
+        "f.staged_presenter_change",
         {"id": fix_id},
     )
     if not rows:
@@ -222,6 +299,7 @@ def explain_fix(fix_id: str):
     first = rows[0]
     try:
         staged_changes = json.loads(first[9] or "[]")
+        presenter_change = json.loads(first[10] or "null")
     except (TypeError, json.JSONDecodeError) as error:
         raise HTTPException(status_code=409, detail="Fix has invalid staged changes") from error
     proposed_talks = []
@@ -247,4 +325,5 @@ def explain_fix(fix_id: str):
         },
         "affected_talk": {"id": first[7], "title": first[8]},
         "proposed_talks": proposed_talks,
+        "presenter_change": presenter_change,
     }
