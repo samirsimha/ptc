@@ -75,6 +75,14 @@ class FixDecisionTests(unittest.TestCase):
             ).result_set,
             [[540, 640]],
         )
+        self.assertEqual(
+            self.graph.query(
+                "MATCH (:Fix {id: $id})-[:HAS_NOTIFICATION]->(n:Notification) "
+                "RETURN collect(n.status)",
+                {"id": fix["id"]},
+            ).result_set[0][0],
+            ["approved", "approved"],
+        )
 
     def test_reject_marks_fix_without_changing_schedule(self):
         fix = self.create_fix()
@@ -88,6 +96,14 @@ class FixDecisionTests(unittest.TestCase):
                 "MATCH (t:Talk {id: 'talk-followup'}) RETURN t.start, t.end"
             ).result_set,
             [[600, 630]],
+        )
+        self.assertEqual(
+            self.graph.query(
+                "MATCH (:Fix {id: $id})-[:HAS_NOTIFICATION]->(n:Notification) "
+                "RETURN collect(n.status)",
+                {"id": fix["id"]},
+            ).result_set[0][0],
+            ["cancelled", "cancelled"],
         )
 
     def test_explain_returns_agent_fix_incident_and_talk_path(self):

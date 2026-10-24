@@ -464,7 +464,7 @@ def schedule_overrun(g, incident, client=None):
 
 
 # Draft one notification for each presenter or attendee of a talk in the proposed changes.
-def draft_notifications(g, fix):
+def draft_notifications(g, fix, fix_id):
     recipients = {}
     changes_by_talk = {
         change["talk_id"]: change
@@ -533,6 +533,14 @@ def draft_notifications(g, fix):
             "Person",
             person_id,
         )
+        schema.link(
+            g,
+            "Fix",
+            fix_id,
+            "HAS_NOTIFICATION",
+            "Notification",
+            notification_id,
+        )
         notifications.append({
             "id": notification_id,
             "body": body,
@@ -546,7 +554,7 @@ def draft_notifications(g, fix):
 def run_pipeline(g, text, client=None):
     incident = record_incident(g, text, client)
     fix = schedule_overrun(g, incident, client)
-    notifications = draft_notifications(g, fix)
+    notifications = draft_notifications(g, fix, fix["id"])
     return {
         "incident": incident,
         "fix": fix,

@@ -110,7 +110,7 @@ class ScheduleAgentTests(unittest.TestCase):
         )
         fix = agents.schedule_overrun(self.graph, incident)
 
-        notifications = agents.draft_notifications(self.graph, fix)
+        notifications = agents.draft_notifications(self.graph, fix, fix["id"])
 
         self.assertEqual(
             {notification["recipient"] for notification in notifications},
@@ -118,8 +118,10 @@ class ScheduleAgentTests(unittest.TestCase):
         )
         rows = self.graph.query(
             "MATCH (agent:Agent {id: 'agent-comms'})-[:DRAFTED]->"
-            "(n:Notification)-[:TO]->(person:Person) "
-            "RETURN person.name, n.status, n.body ORDER BY person.name"
+            "(n:Notification)-[:TO]->(person:Person), "
+            "(f:Fix {id: $fix_id})-[:HAS_NOTIFICATION]->(n) "
+            "RETURN person.name, n.status, n.body ORDER BY person.name",
+            {"fix_id": fix["id"]},
         ).result_set
         self.assertEqual({row[0] for row in rows}, {"Jules Park", "Riley Chen"})
         self.assertTrue(all(row[1] == "draft" for row in rows))

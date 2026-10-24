@@ -34,6 +34,7 @@ RELS = {
     "RESOLVES":   ({"Fix"}, {"Incident"}),
     "PROPOSED":   ({"Agent"}, {"Fix"}),
     "DRAFTED":    ({"Agent"}, {"Notification"}),
+    "HAS_NOTIFICATION": ({"Fix"}, {"Notification"}),
     "TO":         ({"Notification"}, {"Person"}),
 }
  

@@ -184,6 +184,11 @@ def approve_fix(fix_id: str):
         "MATCH (f:Fix {id: $id}) SET f.status = 'applied'",
         {"id": fix_id},
     )
+    run_cypher(
+        "MATCH (f:Fix {id: $id})-[:HAS_NOTIFICATION]->(n:Notification) "
+        "WHERE n.status = 'draft' SET n.status = 'approved'",
+        {"id": fix_id},
+    )
     return {"id": fix_id, "status": "applied"}
 
 
@@ -192,6 +197,11 @@ def reject_fix(fix_id: str):
     _get_proposed_fix(fix_id)
     run_cypher(
         "MATCH (f:Fix {id: $id}) SET f.status = 'rejected'",
+        {"id": fix_id},
+    )
+    run_cypher(
+        "MATCH (f:Fix {id: $id})-[:HAS_NOTIFICATION]->(n:Notification) "
+        "WHERE n.status = 'draft' SET n.status = 'cancelled'",
         {"id": fix_id},
     )
     return {"id": fix_id, "status": "rejected"}
