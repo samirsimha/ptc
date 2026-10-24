@@ -43,17 +43,25 @@ def overrun_cascade(g, talk_id, mins):
     return affected_talks
 
 def find_substitutes(g, talk_id):
-        # finds experts who are available/checked-in who can replace no-shows on the same topic
-        rows = g.query(
-            "MATCH (talk:Talk {id: $talk_id})-[:ABOUT]->(topic:Topic)<-[:EXPERT_IN]-(candidate:Person) "
-            "MATCH (speaker:Person)-[:PRESENTS]->(talk) "
-            "WHERE candidate.checked_in = true AND candidate.id <> speaker.id "
-            "OPTIONAL MATCH (candidate)-[:PRESENTS]->(busy:Talk) "
-            "WHERE busy.start < talk.end AND busy.end > talk.start "
-            "WITH talk, candidate, speaker, count(busy) AS busy_talks "
-            "WHERE busy_talks = 0 "
-            "OPTIONAL MATCH (speaker)-[coauthored:COAUTHORED]-(candidate) "
-            "RETURN candidate.id, candidate.name, count(coauthored) > 0 AS is_coauthor "
-            "ORDER BY is_coauthor DESC, candidate.name",
-            {"talk_id": talk_id},
-        ).result_set
+    # finds experts who are available/checked-in who can replace no-shows on the same topic
+    rows = g.query(
+        "MATCH (talk:Talk {id: $talk_id})-[:ABOUT]->(topic:Topic)<-[:EXPERT_IN]-(candidate:Person) "
+        "MATCH (speaker:Person)-[:PRESENTS]->(talk) "
+        "WHERE candidate.checked_in = true AND candidate.id <> speaker.id "
+        "OPTIONAL MATCH (candidate)-[:PRESENTS]->(busy:Talk) "
+        "WHERE busy.start < talk.end AND busy.end > talk.start "
+        "WITH talk, candidate, speaker, count(busy) AS busy_talks "
+        "WHERE busy_talks = 0 "
+        "OPTIONAL MATCH (speaker)-[coauthored:COAUTHORED]-(candidate) "
+        "RETURN candidate.id, candidate.name, count(coauthored) > 0 AS is_coauthor "
+        "ORDER BY is_coauthor DESC, candidate.name",
+        {"talk_id": talk_id},
+    ).result_set
+    return [
+        {
+            "id": row[0],
+            "name": row[1],
+            "is_coauthor": row[2],
+        }
+        for row in rows
+    ]
