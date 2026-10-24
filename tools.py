@@ -65,3 +65,25 @@ def find_substitutes(g, talk_id):
         }
         for row in rows
     ]
+# find events whose RSVP count exceeds capacity
+def oversold_events(g):
+    rows = g.query(
+        "MATCH (event:SideEvent) "
+        "OPTIONAL MATCH (person:Person)-[:RSVP]->(event) "
+        "WITH event, count(person) AS rsvps "
+        "WHERE rsvps > event.capacity "
+        "OPTIONAL MATCH (catering:Catering)-[:FOR]->(event) "
+        "RETURN event.id, event.name, event.capacity, rsvps, "
+        "coalesce(sum(catering.servings), 0) "
+        "ORDER BY event.name"
+    ).result_set
+    return [
+        {
+            "id": row[0],
+            "name": row[1],
+            "capacity": row[2],
+            "rsvps": row[3],
+            "catering_servings": row[4],
+        }
+        for row in rows
+    ]
