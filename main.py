@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from falkordb import FalkorDB
 from fastapi.middleware.cors import CORSMiddleware
-import schema
+import schema, seed
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -49,7 +49,7 @@ def get_notis():
         })
     return notifications
 
-@app.put("/reset")
+@app.post("/reset")
 def reset():
-    schema.reset()
+    seed.seed(g)
     return schema.audit(g)
