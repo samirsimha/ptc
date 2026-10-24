@@ -10,12 +10,19 @@ import seed
 
 
 def stub_model_client(payload):
-    message = SimpleNamespace(content=json.dumps(payload))
-    response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
+    def create(**kwargs):
+        user_message = next(message["content"] for message in kwargs["messages"] if message["role"] == "user")
+        request = json.loads(user_message)
+        response_payload = payload
+        if "candidates" in request:
+            response_payload = {"candidate_id": request["candidates"][0]["id"]}
+        message = SimpleNamespace(content=json.dumps(response_payload))
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
     return SimpleNamespace(
         chat=SimpleNamespace(
             completions=SimpleNamespace(
-                create=lambda **kwargs: response,
+                create=create,
             ),
         ),
     )
@@ -75,7 +82,7 @@ class ScheduleAgentTests(unittest.TestCase):
 
         self.assertEqual(result["incident"]["type"], "overrun")
         self.assertEqual(result["fix"]["status"], "proposed")
-        self.assertIn("passed room and attendee conflict checks", result["note"])
+        self.assertIn("passed schedule checks", result["note"])
         self.assertEqual(
             self.graph.query(
                 "MATCH (t:Talk {id: 'talk-followup'}) RETURN t.start, t.end"
@@ -104,7 +111,6 @@ class ScheduleAgentTests(unittest.TestCase):
             fix["staged_changes"],
             [{"talk_id": "talk-followup", "start": 610, "end": 640}],
         )
-        self.assertEqual(fix["attendee_conflicts"], {})
         stored_fix = self.graph.query(
             "MATCH (f:Fix {id: $id})-[:RESOLVES]->(i:Incident) "
             "RETURN f.status, f.staged_changes, i.id",
@@ -119,7 +125,7 @@ class ScheduleAgentTests(unittest.TestCase):
         ).result_set
         self.assertEqual(current_times, original_times)
 
-    def test_schedule_rejects_attendee_conflict_before_creating_fix(self):
+    def test_schedule_uses_ai_selected_alternative_to_resolve_attendee_conflict(self):
         incident = agents.record_incident(
             self.graph,
             "The keynote went 70 minutes over",
@@ -130,12 +136,45 @@ class ScheduleAgentTests(unittest.TestCase):
             }),
         )
         fixes_before = self.graph.query("MATCH (f:Fix) RETURN count(f)").result_set[0][0]
+        original_times = self.graph.query(
+            "MATCH (t:Talk) WHERE t.id IN ['talk-followup', 'talk-workshop'] "
+            "RETURN t.id, t.start, t.end ORDER BY t.id"
+        ).result_set
 
-        with self.assertRaisesRegex(ValueError, "Riley Chen has an RSVP conflict"):
-            agents.schedule_overrun(self.graph, incident)
+        fix = agents.schedule_overrun(
+            self.graph,
+            incident,
+            stub_model_client({
+                "incident_type": "overrun",
+                "target_talk_id": "talk-keynote",
+                "mins": 70,
+            }),
+        )
 
         fixes_after = self.graph.query("MATCH (f:Fix) RETURN count(f)").result_set[0][0]
-        self.assertEqual(fixes_after, fixes_before)
+        self.assertEqual(fixes_after, fixes_before + 1)
+        self.assertEqual(fix["selected_candidate_id"], "candidate-1")
+        staged_by_id = {change["talk_id"]: change for change in fix["staged_changes"]}
+        self.assertEqual(staged_by_id["talk-followup"]["start"], 670)
+        self.assertLessEqual(
+            staged_by_id["talk-followup"]["end"],
+            staged_by_id["talk-workshop"]["start"],
+        )
+        talks, sessions, presenters, attendees = agents._schedule_snapshot(self.graph)
+        conflicts = agents._schedule_conflicts(
+            talks,
+            sessions,
+            presenters,
+            attendees,
+            fix["staged_changes"],
+            fix["staged_session_changes"],
+        )
+        self.assertEqual(conflicts, [])
+        current_times = self.graph.query(
+            "MATCH (t:Talk) WHERE t.id IN ['talk-followup', 'talk-workshop'] "
+            "RETURN t.id, t.start, t.end ORDER BY t.id"
+        ).result_set
+        self.assertEqual(current_times, original_times)
 
     def test_schedule_rejects_room_collision_before_creating_fix(self):
         graph = FalkorDB(host="localhost", port=6379).select_graph("ptc_test_room_collision")
@@ -169,7 +208,7 @@ class ScheduleAgentTests(unittest.TestCase):
             )
             fixes_before = graph.query("MATCH (f:Fix) RETURN count(f)").result_set[0][0]
 
-            with self.assertRaisesRegex(ValueError, "would overlap talk-room-blocker"):
+            with self.assertRaisesRegex(ValueError, "No safe schedule alternative"):
                 agents.schedule_overrun(graph, incident)
 
             fixes_after = graph.query("MATCH (f:Fix) RETURN count(f)").result_set[0][0]

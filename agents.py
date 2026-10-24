@@ -108,8 +108,268 @@ def record_incident(g, text, client=None):
     return {**incident, "incident_id": incident_id}
 
 
-# finds talks affected from an overrun, create a fix node, and link it to the incident node
-def schedule_overrun(g, incident):
+# Load the talk, session, speaker, and attendee relationships needed to validate a schedule.
+def _schedule_snapshot(g):
+    talks = {}
+    for row in g.query(
+        "MATCH (talk:Talk) "
+        "OPTIONAL MATCH (talk)-[:IN_ROOM]->(room:Room) "
+        "OPTIONAL MATCH (talk)-[:IN_SESSION]->(session:Session) "
+        "RETURN talk.id, talk.start, talk.end, room.id, session.id"
+    ).result_set:
+        talk = talks.setdefault(row[0], {
+            "id": row[0],
+            "start": row[1],
+            "end": row[2],
+            "room_id": row[3],
+            "session_ids": set(),
+        })
+        if row[3] is not None:
+            talk["room_id"] = row[3]
+        if row[4] is not None:
+            talk["session_ids"].add(row[4])
+
+    sessions = {}
+    for row in g.query(
+        "MATCH (session:Session) "
+        "OPTIONAL MATCH (talk:Talk)-[:IN_SESSION]->(session) "
+        "RETURN session.id, session.start, session.end, session.subfield, talk.id"
+    ).result_set:
+        session = sessions.setdefault(row[0], {
+            "id": row[0],
+            "start": row[1],
+            "end": row[2],
+            "subfield": row[3],
+            "talk_ids": set(),
+        })
+        if row[4] is not None:
+            session["talk_ids"].add(row[4])
+
+    presenters = {}
+    for row in g.query(
+        "MATCH (person:Person)-[:PRESENTS]->(talk:Talk) "
+        "RETURN person.id, talk.id"
+    ).result_set:
+        presenters.setdefault(row[0], set()).add(row[1])
+
+    attendees = {}
+    for row in g.query(
+        "MATCH (person:Person)-[:RSVP]->(talk:Talk) "
+        "RETURN person.id, talk.id"
+    ).result_set:
+        attendees.setdefault(row[0], set()).add(row[1])
+
+    return talks, sessions, presenters, attendees
+
+
+# Expand or shift touched sessions so all their scheduled talks remain inside their session bounds.
+def _session_changes(talks, sessions, talk_changes):
+    changed_talks = {change["talk_id"]: change for change in talk_changes}
+    changes = []
+    for session in sessions.values():
+        member_ids = session["talk_ids"]
+        changed_members = member_ids & changed_talks.keys()
+        if not changed_members:
+            continue
+
+        deltas = {
+            changed_talks[talk_id]["start"] - talks[talk_id]["start"]
+            for talk_id in changed_members
+        }
+        if changed_members == member_ids and len(deltas) == 1:
+            delta = next(iter(deltas))
+            start, end = session["start"] + delta, session["end"] + delta
+        else:
+            start = min(
+                [session["start"]]
+                + [changed_talks[talk_id]["start"] for talk_id in changed_members]
+            )
+            end = max(
+                [session["end"]]
+                + [changed_talks[talk_id]["end"] for talk_id in changed_members]
+            )
+
+        if start != session["start"] or end != session["end"]:
+            changes.append({"session_id": session["id"], "start": start, "end": end})
+    return changes
+
+
+# Reject candidate plans with room, speaker, RSVP, or same-subfield session conflicts.
+def _schedule_conflicts(talks, sessions, presenters, attendees, talk_changes, session_changes):
+    changed = {change["talk_id"] for change in talk_changes}
+    times = {
+        talk_id: {
+            "start": change["start"],
+            "end": change["end"],
+        }
+        for talk_id, change in ((item["talk_id"], item) for item in talk_changes)
+    }
+    for talk_id, talk in talks.items():
+        times.setdefault(talk_id, {"start": talk["start"], "end": talk["end"]})
+
+    conflicts = []
+    talk_ids = list(talks)
+    for index, first_id in enumerate(talk_ids):
+        first = talks[first_id]
+        for second_id in talk_ids[index + 1:]:
+            second = talks[second_id]
+            if first["room_id"] and first["room_id"] == second["room_id"]:
+                if (
+                    (first_id in changed or second_id in changed)
+                    and times[first_id]["start"] < times[second_id]["end"]
+                    and times[first_id]["end"] > times[second_id]["start"]
+                ):
+                    conflicts.append({
+                        "kind": "room",
+                        "talk_ids": [first_id, second_id],
+                        "message": f"{first_id} overlaps {second_id} in {first['room_id']}",
+                    })
+
+    for people, kind in ((presenters, "speaker"), (attendees, "attendee")):
+        for person_id, person_talks in people.items():
+            person_talk_ids = list(person_talks)
+            for index, first_id in enumerate(person_talk_ids):
+                for second_id in person_talk_ids[index + 1:]:
+                    if (
+                        (first_id in changed or second_id in changed)
+                        and times[first_id]["start"] < times[second_id]["end"]
+                        and times[first_id]["end"] > times[second_id]["start"]
+                    ):
+                        conflicts.append({
+                            "kind": kind,
+                            "talk_ids": [first_id, second_id],
+                            "message": f"{person_id} has an overlap between {first_id} and {second_id}",
+                        })
+
+    changed_sessions = {change["session_id"]: change for change in session_changes}
+    for session_id, change in changed_sessions.items():
+        session = sessions[session_id]
+        for talk_id in session["talk_ids"]:
+            talk_time = times[talk_id]
+            if talk_time["start"] < change["start"] or talk_time["end"] > change["end"]:
+                conflicts.append({
+                    "kind": "session_bounds",
+                    "talk_ids": [talk_id],
+                    "message": f"{talk_id} falls outside session {session_id}",
+                })
+        for other_id, other in sessions.items():
+            if other_id == session_id or other["subfield"] != session["subfield"]:
+                continue
+            other_change = changed_sessions.get(other_id)
+            other_start = other_change["start"] if other_change else other["start"]
+            other_end = other_change["end"] if other_change else other["end"]
+            if change["start"] < other_end and change["end"] > other_start:
+                conflicts.append({
+                    "kind": "session",
+                    "talk_ids": list(session["talk_ids"]),
+                    "message": f"session {session_id} overlaps same-subfield session {other_id}",
+                })
+
+    return conflicts
+
+
+# Create a small set of validated later slots for the talk causing the blocking conflict.
+def _alternative_plans(talks, sessions, presenters, attendees, base_changes, conflicts):
+    affected_ids = {change["talk_id"] for change in base_changes}
+    blockers = {
+        talk_id
+        for conflict in conflicts
+        if conflict["kind"] in {"room", "speaker", "attendee"}
+        for talk_id in conflict["talk_ids"]
+        if talk_id not in affected_ids
+    }
+    if len(blockers) != 1:
+        return []
+
+    blocker_id = next(iter(blockers))
+    blocker = talks[blocker_id]
+    if len(blocker["session_ids"]) != 1:
+        return []
+    session_id = next(iter(blocker["session_ids"]))
+    session = sessions[session_id]
+    session_talk_ids = session["talk_ids"]
+    if session_talk_ids & affected_ids:
+        return []
+
+    duration = blocker["end"] - blocker["start"]
+    candidates = []
+    for candidate_start in range(blocker["start"] + 15, 1021 - duration, 15):
+        delta = candidate_start - blocker["start"]
+        talk_changes = list(base_changes)
+        for talk_id in session_talk_ids:
+            talk = talks[talk_id]
+            talk_changes.append({
+                "talk_id": talk_id,
+                "start": talk["start"] + delta,
+                "end": talk["end"] + delta,
+            })
+        session_changes = _session_changes(talks, sessions, talk_changes)
+        if _schedule_conflicts(
+            talks,
+            sessions,
+            presenters,
+            attendees,
+            talk_changes,
+            session_changes,
+        ):
+            continue
+
+        candidates.append({
+            "id": f"candidate-{len(candidates) + 1}",
+            "talk_changes": talk_changes,
+            "session_changes": session_changes,
+        })
+        if len(candidates) == 12:
+            break
+    return candidates
+
+
+# Use the model to select only from schedule alternatives already validated by code.
+def _choose_schedule_candidate(g, incident, candidates, client):
+    if client is None:
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise ModelConfigurationError(
+                "OPENAI_API_KEY is not configured for schedule alternatives"
+            )
+        client = OpenAI()
+
+    response = client.chat.completions.create(
+        model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are the conference Schedule agent. Select the least disruptive "
+                    "valid candidate that resolves the incident. Return only JSON with "
+                    "candidate_id matching one supplied candidate. Never invent or edit "
+                    "schedule changes."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps({
+                    "incident": incident,
+                    "candidates": candidates,
+                }),
+            },
+        ],
+    )
+    content = response.choices[0].message.content
+    if not content:
+        raise ValueError("Schedule model returned an empty response")
+    try:
+        selected = json.loads(content).get("candidate_id")
+    except json.JSONDecodeError as error:
+        raise ValueError("Schedule model returned invalid JSON") from error
+    candidate = next((item for item in candidates if item["id"] == selected), None)
+    if candidate is None:
+        raise ValueError("Schedule model selected an unavailable candidate")
+    return candidate
+
+
+# Find a safe overrun schedule, using AI to choose a validated alternative when needed.
+def schedule_overrun(g, incident, client=None):
     if incident["type"] != "overrun":
         raise ValueError(f"Unsupported incident type: {incident['type']}")
 
@@ -121,58 +381,8 @@ def schedule_overrun(g, incident):
     if not affected_talks:
         raise ValueError("The overrun has no downstream talks to reschedule")
 
-    # checks proposed times for room overlaps and attendee RSVP conflicts before creating a fix node
-    room_rows = g.query(
-        "MATCH (talk:Talk)-[:IN_ROOM]->(room:Room) "
-        "RETURN talk.id, room.id, talk.start, talk.end"
-    ).result_set
-    talks_by_room = {}
-    for row in room_rows:
-        talks_by_room.setdefault(row[1], []).append({
-            "id": row[0],
-            "start": row[2],
-            "end": row[3],
-        })
-
-    affected_ids = {talk["id"] for talk in affected_talks}
-    room_collisions = []
-    for affected in affected_talks:
-        room_for_talk = next(
-            (row[1] for row in room_rows if row[0] == affected["id"]),
-            None,
-        )
-        if room_for_talk is None:
-            raise ValueError(f"Cannot safely reschedule talk without a room: {affected['id']}")
-        for other in talks_by_room[room_for_talk]:
-            if other["id"] in affected_ids:
-                continue
-            if (
-                affected["projected_start"] < other["end"]
-                and affected["projected_end"] > other["start"]
-            ):
-                room_collisions.append((affected["id"], other["id"], room_for_talk))
-
-    if room_collisions:
-        talk_id, other_talk_id, room_id = room_collisions[0]
-        raise ValueError(
-            f"Cannot propose overrun: {talk_id} would overlap {other_talk_id} "
-            f"in room {room_id}"
-        )
-
-    attendee_conflicts = [
-        (talk["id"], conflict)
-        for talk in affected_talks
-        for conflict in talk["attendee_conflicts"]
-    ]
-    if attendee_conflicts:
-        talk_id, conflict = attendee_conflicts[0]
-        raise ValueError(
-            f"Cannot propose overrun: attendee {conflict['person']} has an RSVP "
-            f"conflict between {talk_id} and {conflict['conflicting_talk_id']}"
-        )
-
-    fix_id = f"fix-{uuid4().hex}"
-    staged_changes = [
+    talks, sessions, presenters, attendees = _schedule_snapshot(g)
+    base_changes = [
         {
             "talk_id": talk["id"],
             "start": talk["projected_start"],
@@ -180,9 +390,43 @@ def schedule_overrun(g, incident):
         }
         for talk in affected_talks
     ]
+    base_session_changes = _session_changes(talks, sessions, base_changes)
+    conflicts = _schedule_conflicts(
+        talks,
+        sessions,
+        presenters,
+        attendees,
+        base_changes,
+        base_session_changes,
+    )
+    selected_candidate = None
+    if conflicts:
+        candidates = _alternative_plans(
+            talks,
+            sessions,
+            presenters,
+            attendees,
+            base_changes,
+            conflicts,
+        )
+        if not candidates:
+            raise ValueError(
+                "No safe schedule alternative was found: "
+                + conflicts[0]["message"]
+            )
+        selected_candidate = _choose_schedule_candidate(g, incident, candidates, client)
+        staged_changes = selected_candidate["talk_changes"]
+        staged_session_changes = selected_candidate["session_changes"]
+    else:
+        staged_changes = base_changes
+        staged_session_changes = base_session_changes
+
+    fix_id = f"fix-{uuid4().hex}"
     proposal = (
-        f"Delay {len(staged_changes)} downstream talk(s) by "
+        f"Delay {len(staged_changes)} talk(s) by "
         f"{incident['mins']} minutes"
+        if selected_candidate is None
+        else f"Reschedule {len(staged_changes)} talk(s) to resolve the overrun conflicts"
     )
     schema.make_node(
         g,
@@ -191,6 +435,7 @@ def schedule_overrun(g, incident):
         proposal=proposal,
         status="proposed",
         staged_changes=json.dumps(staged_changes),
+        staged_session_changes=json.dumps(staged_session_changes),
     )
     schema.link(
         g,
@@ -213,16 +458,17 @@ def schedule_overrun(g, incident):
         "proposal": proposal,
         "status": "proposed",
         "staged_changes": staged_changes,
-        "attendee_conflicts": {},
+        "staged_session_changes": staged_session_changes,
+        "selected_candidate_id": selected_candidate["id"] if selected_candidate else None,
     }
 
 
 # runs Triage and Schedule agents in order and returns the incident and proposed fix
 def run_pipeline(g, text, client=None):
     incident = record_incident(g, text, client)
-    fix = schedule_overrun(g, incident)
+    fix = schedule_overrun(g, incident, client)
     return {
         "incident": incident,
         "fix": fix,
-        "note": "Proposal passed room and attendee conflict checks; changes await human approval.",
+        "note": "Proposal passed schedule checks; changes await human approval.",
     }
