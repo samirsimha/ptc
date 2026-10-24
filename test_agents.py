@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from falkordb import FalkorDB
 
 import agents
+import schema
 import seed
 
 
@@ -64,17 +65,17 @@ class ScheduleAgentTests(unittest.TestCase):
         ).result_set
         result = agents.run_pipeline(
             self.graph,
-            "The keynote went 70 minutes over",
+            "The keynote went 10 minutes over",
             stub_model_client({
                 "incident_type": "overrun",
                 "target_talk_id": "talk-keynote",
-                "mins": 70,
+                "mins": 10,
             }),
         )
 
         self.assertEqual(result["incident"]["type"], "overrun")
         self.assertEqual(result["fix"]["status"], "proposed")
-        self.assertIn("not yet validated", result["note"])
+        self.assertIn("passed room and attendee conflict checks", result["note"])
         self.assertEqual(
             self.graph.query(
                 "MATCH (t:Talk {id: 'talk-followup'}) RETURN t.start, t.end"
@@ -85,11 +86,11 @@ class ScheduleAgentTests(unittest.TestCase):
     def test_schedule_agent_stages_overrun_changes_without_applying_them(self):
         incident = agents.record_incident(
             self.graph,
-            "The keynote went 70 minutes over",
+            "The keynote went 10 minutes over",
             stub_model_client({
                 "incident_type": "overrun",
                 "target_talk_id": "talk-keynote",
-                "mins": 70,
+                "mins": 10,
             }),
         )
         original_times = self.graph.query(
@@ -101,12 +102,9 @@ class ScheduleAgentTests(unittest.TestCase):
         self.assertEqual(fix["status"], "proposed")
         self.assertEqual(
             fix["staged_changes"],
-            [{"talk_id": "talk-followup", "start": 670, "end": 700}],
+            [{"talk_id": "talk-followup", "start": 610, "end": 640}],
         )
-        self.assertEqual(
-            fix["attendee_conflicts"]["talk-followup"][0]["person"],
-            "Riley Chen",
-        )
+        self.assertEqual(fix["attendee_conflicts"], {})
         stored_fix = self.graph.query(
             "MATCH (f:Fix {id: $id})-[:RESOLVES]->(i:Incident) "
             "RETURN f.status, f.staged_changes, i.id",
@@ -120,6 +118,64 @@ class ScheduleAgentTests(unittest.TestCase):
             "MATCH (t:Talk {id: 'talk-followup'}) RETURN t.start, t.end"
         ).result_set
         self.assertEqual(current_times, original_times)
+
+    def test_schedule_rejects_attendee_conflict_before_creating_fix(self):
+        incident = agents.record_incident(
+            self.graph,
+            "The keynote went 70 minutes over",
+            stub_model_client({
+                "incident_type": "overrun",
+                "target_talk_id": "talk-keynote",
+                "mins": 70,
+            }),
+        )
+        fixes_before = self.graph.query("MATCH (f:Fix) RETURN count(f)").result_set[0][0]
+
+        with self.assertRaisesRegex(ValueError, "Riley Chen has an RSVP conflict"):
+            agents.schedule_overrun(self.graph, incident)
+
+        fixes_after = self.graph.query("MATCH (f:Fix) RETURN count(f)").result_set[0][0]
+        self.assertEqual(fixes_after, fixes_before)
+
+    def test_schedule_rejects_room_collision_before_creating_fix(self):
+        graph = FalkorDB(host="localhost", port=6379).select_graph("ptc_test_room_collision")
+        seed.seed(graph)
+        try:
+            schema.make_node(
+                graph,
+                "Talk",
+                id="talk-room-blocker",
+                title="Room blocker",
+                start=610,
+                end=640,
+                status="scheduled",
+            )
+            schema.link(
+                graph,
+                "Talk",
+                "talk-room-blocker",
+                "IN_ROOM",
+                "Room",
+                "room-west-main",
+            )
+            incident = agents.record_incident(
+                graph,
+                "The keynote went 10 minutes over",
+                stub_model_client({
+                    "incident_type": "overrun",
+                    "target_talk_id": "talk-keynote",
+                    "mins": 10,
+                }),
+            )
+            fixes_before = graph.query("MATCH (f:Fix) RETURN count(f)").result_set[0][0]
+
+            with self.assertRaisesRegex(ValueError, "would overlap talk-room-blocker"):
+                agents.schedule_overrun(graph, incident)
+
+            fixes_after = graph.query("MATCH (f:Fix) RETURN count(f)").result_set[0][0]
+            self.assertEqual(fixes_after, fixes_before)
+        finally:
+            graph.delete()
 
 
 if __name__ == "__main__":

@@ -121,6 +121,56 @@ def schedule_overrun(g, incident):
     if not affected_talks:
         raise ValueError("The overrun has no downstream talks to reschedule")
 
+    # checks proposed times for room overlaps and attendee RSVP conflicts before creating a fix node
+    room_rows = g.query(
+        "MATCH (talk:Talk)-[:IN_ROOM]->(room:Room) "
+        "RETURN talk.id, room.id, talk.start, talk.end"
+    ).result_set
+    talks_by_room = {}
+    for row in room_rows:
+        talks_by_room.setdefault(row[1], []).append({
+            "id": row[0],
+            "start": row[2],
+            "end": row[3],
+        })
+
+    affected_ids = {talk["id"] for talk in affected_talks}
+    room_collisions = []
+    for affected in affected_talks:
+        room_for_talk = next(
+            (row[1] for row in room_rows if row[0] == affected["id"]),
+            None,
+        )
+        if room_for_talk is None:
+            raise ValueError(f"Cannot safely reschedule talk without a room: {affected['id']}")
+        for other in talks_by_room[room_for_talk]:
+            if other["id"] in affected_ids:
+                continue
+            if (
+                affected["projected_start"] < other["end"]
+                and affected["projected_end"] > other["start"]
+            ):
+                room_collisions.append((affected["id"], other["id"], room_for_talk))
+
+    if room_collisions:
+        talk_id, other_talk_id, room_id = room_collisions[0]
+        raise ValueError(
+            f"Cannot propose overrun: {talk_id} would overlap {other_talk_id} "
+            f"in room {room_id}"
+        )
+
+    attendee_conflicts = [
+        (talk["id"], conflict)
+        for talk in affected_talks
+        for conflict in talk["attendee_conflicts"]
+    ]
+    if attendee_conflicts:
+        talk_id, conflict = attendee_conflicts[0]
+        raise ValueError(
+            f"Cannot propose overrun: attendee {conflict['person']} has an RSVP "
+            f"conflict between {talk_id} and {conflict['conflicting_talk_id']}"
+        )
+
     fix_id = f"fix-{uuid4().hex}"
     staged_changes = [
         {
@@ -163,11 +213,7 @@ def schedule_overrun(g, incident):
         "proposal": proposal,
         "status": "proposed",
         "staged_changes": staged_changes,
-        "attendee_conflicts": {
-            talk["id"]: talk["attendee_conflicts"]
-            for talk in affected_talks
-            if talk["attendee_conflicts"]
-        },
+        "attendee_conflicts": {},
     }
 
 
@@ -178,5 +224,5 @@ def run_pipeline(g, text, client=None):
     return {
         "incident": incident,
         "fix": fix,
-        "note": "Draft proposal only; schedule and attendee conflicts are not yet validated.",
+        "note": "Proposal passed room and attendee conflict checks; changes await human approval.",
     }
