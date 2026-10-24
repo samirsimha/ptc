@@ -1,6 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from falkordb import FalkorDB
 from fastapi.middleware.cors import CORSMiddleware
+from openai import OpenAIError
 from pydantic import BaseModel
 import schema, seed
 import agents
@@ -64,4 +65,14 @@ def reset():
 
 @app.post("/incident")
 def create_incident(request: IncidentRequest):
-    return agents.record_incident(g, request.text)
+    try:
+        return agents.record_incident(g, request.text)
+    except agents.ModelConfigurationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except OpenAIError as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Triage model request failed; check API availability and configuration",
+        ) from error

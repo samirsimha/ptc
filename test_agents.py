@@ -1,10 +1,23 @@
 import json
 import unittest
+from types import SimpleNamespace
 
 from falkordb import FalkorDB
 
 import agents
 import seed
+
+
+def stub_model_client(payload):
+    message = SimpleNamespace(content=json.dumps(payload))
+    response = SimpleNamespace(choices=[SimpleNamespace(message=message)])
+    return SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **kwargs: response,
+            ),
+        ),
+    )
 
 
 class ScheduleAgentTests(unittest.TestCase):
@@ -17,8 +30,44 @@ class ScheduleAgentTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.graph.delete()
 
+    def test_triage_interprets_natural_language_and_returns_structured_incident(self):
+        incident = agents.parse_incident(
+            self.graph,
+            "The keynote went 70 minutes over",
+            stub_model_client({
+                "incident_type": "overrun",
+                "target_talk_id": "talk-keynote",
+                "mins": 70,
+            }),
+        )
+
+        self.assertEqual(
+            incident,
+            {"type": "overrun", "target_talk_id": "talk-keynote", "mins": 70},
+        )
+
+    def test_triage_rejects_talk_ids_not_in_the_graph(self):
+        with self.assertRaisesRegex(ValueError, "talk that does not exist"):
+            agents.parse_incident(
+                self.graph,
+                "The keynote went 70 minutes over",
+                stub_model_client({
+                    "incident_type": "overrun",
+                    "target_talk_id": "talk-made-up",
+                    "mins": 70,
+                }),
+            )
+
     def test_schedule_agent_stages_overrun_changes_without_applying_them(self):
-        incident = agents.record_incident(self.graph, "keynote running 70 over")
+        incident = agents.record_incident(
+            self.graph,
+            "The keynote went 70 minutes over",
+            stub_model_client({
+                "incident_type": "overrun",
+                "target_talk_id": "talk-keynote",
+                "mins": 70,
+            }),
+        )
         original_times = self.graph.query(
             "MATCH (t:Talk {id: 'talk-followup'}) RETURN t.start, t.end"
         ).result_set
