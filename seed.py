@@ -42,6 +42,7 @@ def seed(g):
         {"id": "person-kai", "name": "Kai Rivers", "checked_in": True, "role": "speaker"},
         {"id": "person-tess", "name": "Tess Nguyen", "checked_in": True, "role": "speaker"},
         {"id": "person-chair", "name": "Sam Ellis", "checked_in": True, "role": "speaker"},
+        {"id": "person-rsvp-test", "name": "Riley Chen", "checked_in": True, "role": "attendee"},
     ]
     topics = [
         {"id": "topic-ai", "name": "Artificial Intelligence"},
@@ -104,6 +105,8 @@ def seed(g):
         ("Person", "person-avery", "PRESENTS", "Talk", "talk-east", {}),
         ("Person", "person-kai", "PRESENTS", "Talk", "talk-panel-first", {}),
         ("Person", "person-chair", "PRESENTS", "Talk", "talk-panel-second", {}),
+        ("Person", "person-rsvp-test", "RSVP", "Talk", "talk-followup", {}),
+        ("Person", "person-rsvp-test", "RSVP", "Talk", "talk-workshop", {}),
         ("Person", "person-chair", "CHAIRS", "Session", "session-panel", {}),
         ("Person", "person-lena", "CHAIRS", "Session", "session-neuro-a", {}),
         ("Person", "person-nina", "COAUTHORED", "Person", "person-omar", {}),
