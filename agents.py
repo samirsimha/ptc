@@ -169,3 +169,14 @@ def schedule_overrun(g, incident):
             if talk["attendee_conflicts"]
         },
     }
+
+
+# Run Triage and Schedule in sequence, leaving proposed changes staged for approval.
+def run_pipeline(g, text, client=None):
+    incident = record_incident(g, text, client)
+    fix = schedule_overrun(g, incident)
+    return {
+        "incident": incident,
+        "fix": fix,
+        "note": "Draft proposal only; schedule and attendee conflicts are not yet validated.",
+    }

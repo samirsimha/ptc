@@ -58,6 +58,30 @@ class ScheduleAgentTests(unittest.TestCase):
                 }),
             )
 
+    def test_pipeline_records_incident_and_stages_fix(self):
+        original_times = self.graph.query(
+            "MATCH (t:Talk {id: 'talk-followup'}) RETURN t.start, t.end"
+        ).result_set
+        result = agents.run_pipeline(
+            self.graph,
+            "The keynote went 70 minutes over",
+            stub_model_client({
+                "incident_type": "overrun",
+                "target_talk_id": "talk-keynote",
+                "mins": 70,
+            }),
+        )
+
+        self.assertEqual(result["incident"]["type"], "overrun")
+        self.assertEqual(result["fix"]["status"], "proposed")
+        self.assertIn("not yet validated", result["note"])
+        self.assertEqual(
+            self.graph.query(
+                "MATCH (t:Talk {id: 'talk-followup'}) RETURN t.start, t.end"
+            ).result_set,
+            original_times,
+        )
+
     def test_schedule_agent_stages_overrun_changes_without_applying_them(self):
         incident = agents.record_incident(
             self.graph,

@@ -66,7 +66,7 @@ def reset():
 @app.post("/incident")
 def create_incident(request: IncidentRequest):
     try:
-        return agents.record_incident(g, request.text)
+        return agents.run_pipeline(g, request.text)
     except agents.ModelConfigurationError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except ValueError as error:
