@@ -13,7 +13,7 @@ class ModelConfigurationError(RuntimeError):
     pass
 
 
-# Use the model to identify an incident and validate its answer against graph talks.
+# uses AI to interpret incident text and returns the details as a dictionary
 def parse_incident(g, text, client=None):
     talks = g.query(
         "MATCH (t:Talk) RETURN t.id, t.title",
@@ -78,7 +78,7 @@ def parse_incident(g, text, client=None):
         "mins": mins,
     }
 
-# Record validated Triage output as an incident node and link it to its talk.
+# uses output from parse_incident to find the talk_id and create an incident node in graph
 def record_incident(g, text, client=None):
     incident = parse_incident(g, text, client)
     talk_rows = g.query(
@@ -171,7 +171,7 @@ def schedule_overrun(g, incident):
     }
 
 
-# Run Triage and Schedule in sequence, leaving proposed changes staged for approval.
+# runs Triage and Schedule agents in order and returns the incident and proposed fix
 def run_pipeline(g, text, client=None):
     incident = record_incident(g, text, client)
     fix = schedule_overrun(g, incident)
