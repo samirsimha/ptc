@@ -58,7 +58,7 @@ def make_node(g, label, **props):
     missing = [p for p in NODES[label] if p not in props]
     if missing:
         raise ValueError(f"{label} missing {missing}")
-    g.query(f"CREATE (:{label} $p)", {"p": props})
+    g.query(f"CREATE (n:{label}) SET n = $p", {"p": props})
  
  
 # create an edge between two nodes by id, crash if type/direction wrong or nodes not found
@@ -70,7 +70,7 @@ def link(g, from_label, from_id, rel, to_label, to_id, **props):
         raise ValueError(f"{rel} can't go {from_label} -> {to_label}")
     res = g.query(
         f"MATCH (a:{from_label} {{id:$a}}), (b:{to_label} {{id:$b}}) "
-        f"CREATE (a)-[r:{rel} $p]->(b) RETURN count(r)",
+        f"CREATE (a)-[r:{rel}]->(b) SET r = $p RETURN count(r)",
         {"a": from_id, "b": to_id, "p": props},
     )
     if res.result_set[0][0] == 0:
