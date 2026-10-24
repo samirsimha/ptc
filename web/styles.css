@@ -1,7 +1,6 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap");
-
 :root {
   color-scheme: dark;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --bg: #0b1020;
   --panel: rgba(16, 23, 42, 0.88);
   --panel-strong: #111a2e;
@@ -14,7 +13,7 @@
   --violet: #aa9bff;
   --amber: #ffc879;
   --red: #ff8b94;
-  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
 }
 
 * { box-sizing: border-box; }
@@ -60,7 +59,7 @@ a { color: inherit; text-decoration: none; }
   display: inline-flex;
   align-items: center;
   gap: 11px;
-  font-family: Manrope, sans-serif;
+  font-family: inherit;
   font-size: 13px;
   font-weight: 800;
   letter-spacing: 0.11em;
@@ -79,8 +78,7 @@ a { color: inherit; text-decoration: none; }
 }
 .live-indicator { color: #bbcadb; font-size: 10px; display: inline-flex; align-items: center; gap: 9px; }
 .live-indicator > span, .panel-status > span, .graph-live > span {
-  width: 6px; height: 6px; border-radius: 50%; background: #79e5bd;
-  box-shadow: 0 0 12px rgba(121, 229, 189, 0.75);
+  width: 6px; height: 6px; border-radius: 50%; background: var(--cyan);
 }
 .topbar-divider { height: 20px; width: 1px; background: var(--line); }
 .event-label { font-size: 10px; color: #8995aa; }
@@ -94,7 +92,7 @@ a { color: inherit; text-decoration: none; }
 h1, h2, h3, h4, p { margin-top: 0; }
 h1 {
   margin: 15px 0 15px;
-  font-family: Manrope, sans-serif;
+  font-family: inherit;
   font-size: clamp(43px, 5.3vw, 68px);
   line-height: 1.06;
   font-weight: 600;
@@ -122,11 +120,11 @@ h1 > span { color: #96a7c0; }
 .icon-amber { color: var(--amber); background: rgba(255, 200, 121, 0.1); }
 .metric-card > div { min-width: 0; display: grid; gap: 5px; }
 .metric-label { color: #8b98ad; font-size: 9px; }
-.metric-card strong { font: 600 22px Manrope, sans-serif; letter-spacing: -0.03em; }
+.metric-card strong { font: 600 22px var(--font-sans); letter-spacing: -0.03em; }
 .metric-note { margin-left: auto; color: #6d7b91; font-size: 11px; }
 
 .section-heading { display: flex; align-items: end; justify-content: space-between; margin-bottom: 19px; }
-.section-heading h2 { margin: 7px 0 0; font: 600 26px Manrope, sans-serif; letter-spacing: -0.045em; }
+.section-heading h2 { margin: 7px 0 0; font: 600 26px var(--font-sans); letter-spacing: -0.045em; }
 .quiet-button { display: flex; align-items: center; gap: 8px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: #abb8cc; font-size: 11px; cursor: pointer; transition: border-color .2s, color .2s; }
 .quiet-button:hover { color: var(--text); border-color: rgba(83,213,231,.45); }
 .quiet-button span { font-size: 16px; }
@@ -134,7 +132,7 @@ h1 > span { color: #96a7c0; }
 .panel { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: 0 18px 50px rgba(0,0,0,.12); }
 .schedule-panel { overflow: hidden; }
 .panel-heading { min-height: 76px; padding: 18px 21px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); }
-.panel-heading h3 { margin: 0 0 4px; font: 600 14px Manrope, sans-serif; }
+.panel-heading h3 { margin: 0 0 4px; font: 600 14px var(--font-sans); }
 .panel-heading p { margin: 0; color: var(--muted); font-size: 11px; }
 .panel-status { display: flex; align-items: center; gap: 7px; color: #a7b9c7; font-size: 9px; }
 .panel-status > span { width: 5px; height: 5px; }
@@ -142,14 +140,14 @@ h1 > span { color: #96a7c0; }
 .room-section { padding: 18px 0 5px; }
 .room-section + .room-section { border-top: 1px solid var(--line); }
 .room-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
-.room-name { display: flex; align-items: center; gap: 9px; font: 600 12px Manrope, sans-serif; }
+.room-name { display: flex; align-items: center; gap: 9px; font: 600 12px var(--font-sans); }
 .room-mark { width: 7px; height: 7px; border: 1px solid var(--cyan); border-radius: 2px; box-shadow: 0 0 7px rgba(83, 213, 231, .28); }
 .room-count { color: #748198; font: 9px "DM Mono", monospace; }
 .talk-row { display: grid; grid-template-columns: 69px minmax(0, 1fr) auto; gap: 12px; align-items: center; min-height: 64px; padding: 11px 8px; border-radius: 6px; transition: background .18s; }
 .talk-row:hover { background: rgba(125, 151, 189, .06); }
 .talk-time { color: #84dce6; font: 10px "DM Mono", monospace; white-space: nowrap; }
 .talk-info { min-width: 0; }
-.talk-title { display: block; overflow: hidden; color: #e2e8f2; font: 500 12px Manrope, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+.talk-title { display: block; overflow: hidden; color: #e2e8f2; font: 500 12px var(--font-sans); text-overflow: ellipsis; white-space: nowrap; }
 .talk-meta { display: flex; gap: 8px; margin-top: 5px; color: #77859c; font-size: 10px; }
 .talk-meta .separator { color: #46546b; }
 .talk-badge { padding: 4px 7px; border: 1px solid rgba(130,148,171,.18); border-radius: 4px; color: #a6b1c1; font: 8px "DM Mono", monospace; white-space: nowrap; text-transform: uppercase; }
@@ -160,7 +158,7 @@ h1 > span { color: #96a7c0; }
 .incident-heading { display: flex; gap: 12px; align-items: center; }
 .incident-icon { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid rgba(83,213,231,.25); border-radius: 8px; color: var(--cyan); background: rgba(83,213,231,.08); font-size: 18px; }
 .incident-heading .eyebrow { font-size: 9px; }
-.incident-heading h3 { margin: 4px 0 0; font: 600 17px Manrope, sans-serif; }
+.incident-heading h3 { margin: 4px 0 0; font: 600 17px var(--font-sans); }
 .incident-intro { margin: 15px 0 20px; color: #98a5ba; font-size: 12px; line-height: 1.7; }
 .incident-panel form > label { display: block; margin-bottom: 8px; color: #a7b4c7; font-size: 9px; }
 .incident-panel textarea { width: 100%; min-height: 103px; resize: vertical; padding: 12px 13px; border: 1px solid rgba(161,184,216,.19); border-radius: 6px; outline: none; color: var(--text); background: rgba(7,12,24,.56); font-size: 12px; line-height: 1.6; transition: border-color .18s, box-shadow .18s; }
@@ -182,7 +180,7 @@ h1 > span { color: #96a7c0; }
 .review-label { display: flex; align-items: center; gap: 7px; color: #92d6dd; font-size: 8px; }
 .review-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 9px rgba(83,213,231,.7); }
 .review-pending { color: var(--amber); font-size: 8px; }
-.review-card h4 { margin: 12px 0 10px; font: 600 14px/1.45 Manrope, sans-serif; }
+.review-card h4 { margin: 12px 0 10px; font: 600 14px/1.45 var(--font-sans); }
 .fix-details { display: grid; gap: 7px; }
 .fix-detail { padding: 9px 10px; border-left: 2px solid rgba(83,213,231,.54); background: rgba(6,12,24,.39); color: #c0cad8; font-size: 10px; line-height: 1.5; }
 .fix-detail strong { color: #f0f4f8; font-weight: 600; }
@@ -210,7 +208,7 @@ h1 > span { color: #96a7c0; }
 .graph-panel { overflow: hidden; }
 .graph-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--line); }
 .graph-toolbar > div { display: grid; gap: 4px; }
-.graph-toolbar strong { color: #dce5f1; font: 500 11px Manrope, sans-serif; }
+.graph-toolbar strong { color: #dce5f1; font: 500 11px var(--font-sans); }
 .graph-toolbar > div > span { color: #77859c; font-size: 10px; }
 .graph-live { display: flex; align-items: center; gap: 7px; color: #8697ad; font-size: 8px; }
 .graph-live > span { width: 5px; height: 5px; }
@@ -222,7 +220,7 @@ h1 > span { color: #96a7c0; }
 .graph-edge.edge-AFFECTS, .graph-edge.edge-RESOLVES, .graph-edge.edge-PROPOSED { stroke: var(--amber); }
 .graph-lane-label { fill: #78869c; font: 9px "DM Mono", monospace; letter-spacing: 1px; }
 .graph-node rect { stroke-width: 1; rx: 6; }
-.graph-node text { fill: #d6dfeb; font: 9px "DM Sans", sans-serif; pointer-events: none; }
+.graph-node text { fill: #d6dfeb; font: 9px var(--font-sans); pointer-events: none; }
 .graph-node .node-id { fill: #7c8aa1; font: 7px "DM Mono", monospace; }
 .graph-node.node-Talk rect { fill: #132d3a; stroke: rgba(83,213,231,.5); }
 .graph-node.node-Person rect { fill: #211f3b; stroke: rgba(170,155,255,.48); }

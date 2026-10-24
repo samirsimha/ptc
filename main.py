@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from threading import Lock
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -18,6 +19,7 @@ app.mount("/web", StaticFiles(directory=WEB_DIR), name="web")
 
 db = FalkorDB(host="localhost", port=6379)
 g = db.select_graph("conf")
+_fix_decision_lock = Lock()
 
 
 class IncidentRequest(BaseModel):
@@ -27,6 +29,19 @@ class IncidentRequest(BaseModel):
 # send a Cypher query, get rows back
 def run_cypher(q, params=None):
     return g.query(q, params or {}).result_set
+
+
+def run_cypher_transaction(statements):
+    """Execute graph writes as one Redis transaction, without interleaving commands."""
+    with g.client.pipeline(transaction=True) as transaction:
+        for query, params in statements:
+            transaction.execute_command(
+                "GRAPH.QUERY",
+                g.name,
+                g._build_params_header(params or {}) + query,
+                "--compact",
+            )
+        return transaction.execute()
 
 
 @app.get("/", include_in_schema=False)
@@ -154,6 +169,8 @@ def _get_proposed_fix(fix_id):
 
 # Validate the stored schedule changes before changing any Talk or Session nodes.
 def _validate_staged_changes(talk_changes, session_changes, presenter_change):
+    talk_ids = set()
+    session_ids = set()
     for change in talk_changes:
         if (
             not isinstance(change, dict)
@@ -165,6 +182,9 @@ def _validate_staged_changes(talk_changes, session_changes, presenter_change):
             or change["start"] >= change["end"]
         ):
             raise HTTPException(status_code=409, detail="Fix contains invalid talk changes")
+        if change["talk_id"] in talk_ids:
+            raise HTTPException(status_code=409, detail="Fix contains duplicate talk changes")
+        talk_ids.add(change["talk_id"])
         if not run_cypher(
             "MATCH (t:Talk {id: $id}) RETURN t.id",
             {"id": change["talk_id"]},
@@ -182,6 +202,9 @@ def _validate_staged_changes(talk_changes, session_changes, presenter_change):
             or change["start"] >= change["end"]
         ):
             raise HTTPException(status_code=409, detail="Fix contains invalid session changes")
+        if change["session_id"] in session_ids:
+            raise HTTPException(status_code=409, detail="Fix contains duplicate session changes")
+        session_ids.add(change["session_id"])
         if not run_cypher(
             "MATCH (s:Session {id: $id}) RETURN s.id",
             {"id": change["session_id"]},
@@ -194,6 +217,11 @@ def _validate_staged_changes(talk_changes, session_changes, presenter_change):
             raise HTTPException(status_code=409, detail="Fix contains an invalid presenter change")
         if presenter_change["from_person_id"] == presenter_change["to_person_id"]:
             raise HTTPException(status_code=409, detail="Fix has the same current and proposed presenter")
+        if not run_cypher(
+            "MATCH (t:Talk {id: $talk_id}) RETURN t.id",
+            {"talk_id": presenter_change["talk_id"]},
+        ):
+            raise HTTPException(status_code=409, detail="Fix references a missing presenter talk")
         current_presenter = run_cypher(
             "MATCH (p:Person {id: $person_id})-[:PRESENTS]->"
             "(t:Talk {id: $talk_id}) RETURN p.id",
@@ -259,70 +287,89 @@ def _validate_staged_changes(talk_changes, session_changes, presenter_change):
 
 @app.post("/fixes/{fix_id}/approve")
 def approve_fix(fix_id: str):
-    talk_changes, session_changes, presenter_change = _get_proposed_fix(fix_id)
-    _validate_staged_changes(talk_changes, session_changes, presenter_change)
+    # Serialize decisions within this API process so validation and application cannot
+    # race with another approval/rejection request handled by the same worker.
+    with _fix_decision_lock:
+        talk_changes, session_changes, presenter_change = _get_proposed_fix(fix_id)
+        _validate_staged_changes(talk_changes, session_changes, presenter_change)
+        claimed = run_cypher(
+            "MATCH (f:Fix {id: $id, status: 'proposed'}) "
+            "SET f.status = 'applying' RETURN f.id",
+            {"id": fix_id},
+        )
+        if not claimed:
+            raise HTTPException(status_code=409, detail="Fix is not awaiting a decision")
 
-    for change in talk_changes:
-        run_cypher(
-            "MATCH (t:Talk {id: $id}) "
-            "SET t.start = $start, t.end = $end",
-            {
-                "id": change["talk_id"],
-                "start": change["start"],
-                "end": change["end"],
-            },
-        )
-    for change in session_changes:
-        run_cypher(
-            "MATCH (s:Session {id: $id}) "
-            "SET s.start = $start, s.end = $end",
-            {
-                "id": change["session_id"],
-                "start": change["start"],
-                "end": change["end"],
-            },
-        )
-    if presenter_change is not None:
-        run_cypher(
-            "MATCH (old:Person {id: $from_id})-[r:PRESENTS]->"
-            "(talk:Talk {id: $talk_id}) DELETE r",
-            {
-                "from_id": presenter_change["from_person_id"],
-                "talk_id": presenter_change["talk_id"],
-            },
-        )
-        run_cypher(
-            "MATCH (new:Person {id: $to_id}), (talk:Talk {id: $talk_id}) "
-            "CREATE (new)-[:PRESENTS]->(talk)",
-            {
-                "to_id": presenter_change["to_person_id"],
-                "talk_id": presenter_change["talk_id"],
-            },
-        )
-    run_cypher(
-        "MATCH (f:Fix {id: $id}) SET f.status = 'applied'",
-        {"id": fix_id},
-    )
-    run_cypher(
-        "MATCH (f:Fix {id: $id})-[:HAS_NOTIFICATION]->(n:Notification) "
-        "WHERE n.status = 'draft' SET n.status = 'approved'",
-        {"id": fix_id},
-    )
+        statements = []
+        for change in talk_changes:
+            statements.append((
+                "MATCH (t:Talk {id: $id}) "
+                "SET t.start = $start, t.end = $end",
+                {
+                    "id": change["talk_id"],
+                    "start": change["start"],
+                    "end": change["end"],
+                },
+            ))
+        for change in session_changes:
+            statements.append((
+                "MATCH (s:Session {id: $id}) "
+                "SET s.start = $start, s.end = $end",
+                {
+                    "id": change["session_id"],
+                    "start": change["start"],
+                    "end": change["end"],
+                },
+            ))
+        if presenter_change is not None:
+            statements.append((
+                "MATCH (old:Person {id: $from_id})-[r:PRESENTS]->"
+                "(talk:Talk {id: $talk_id}) DELETE r",
+                {
+                    "from_id": presenter_change["from_person_id"],
+                    "talk_id": presenter_change["talk_id"],
+                },
+            ))
+            statements.append((
+                "MATCH (new:Person {id: $to_id}), (talk:Talk {id: $talk_id}) "
+                "CREATE (new)-[:PRESENTS]->(talk)",
+                {
+                    "to_id": presenter_change["to_person_id"],
+                    "talk_id": presenter_change["talk_id"],
+                },
+            ))
+        statements.extend([
+            (
+                "MATCH (f:Fix {id: $id, status: 'applying'}) "
+                "OPTIONAL MATCH (f)-[:HAS_NOTIFICATION]->(n:Notification {status: 'draft'}) "
+                "WITH f, collect(n) AS notifications "
+                "SET f.status = 'applied' "
+                "FOREACH (notification IN notifications | "
+                "SET notification.status = 'approved') "
+                "RETURN f.id",
+                {"id": fix_id},
+            ),
+        ])
+        run_cypher_transaction(statements)
     return {"id": fix_id, "status": "applied"}
 
 
 @app.post("/fixes/{fix_id}/reject")
 def reject_fix(fix_id: str):
-    _get_proposed_fix(fix_id)
-    run_cypher(
-        "MATCH (f:Fix {id: $id}) SET f.status = 'rejected'",
-        {"id": fix_id},
-    )
-    run_cypher(
-        "MATCH (f:Fix {id: $id})-[:HAS_NOTIFICATION]->(n:Notification) "
-        "WHERE n.status = 'draft' SET n.status = 'cancelled'",
-        {"id": fix_id},
-    )
+    with _fix_decision_lock:
+        _get_proposed_fix(fix_id)
+        rejected = run_cypher(
+            "MATCH (f:Fix {id: $id, status: 'proposed'}) "
+            "OPTIONAL MATCH (f)-[:HAS_NOTIFICATION]->(n:Notification {status: 'draft'}) "
+            "WITH f, collect(n) AS notifications "
+            "SET f.status = 'rejected' "
+            "FOREACH (notification IN notifications | "
+            "SET notification.status = 'cancelled') "
+            "RETURN f.id",
+            {"id": fix_id},
+        )
+        if not rejected:
+            raise HTTPException(status_code=409, detail="Fix is not awaiting a decision")
     return {"id": fix_id, "status": "rejected"}
 
 

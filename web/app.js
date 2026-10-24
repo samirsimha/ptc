@@ -161,21 +161,32 @@ function setDecisionState(status, message) {
 }
 
 async function loadDashboard() {
-  scheduleContent.innerHTML = '<div class="loading-state"><span class="spinner"></span> Loading the floor plan…</div>';
-  try {
-    const [rooms, graph, fixes] = await Promise.all([
-      api("/schedule"),
-      api("/graph"),
-      api("/fixes"),
-    ]);
-    renderSchedule(rooms);
-    renderGraph(graph);
-    const pending = fixes.filter((fix) => fix.status === "proposed").length;
-    document.querySelector("#pending-count").textContent = String(pending).padStart(2, "0");
-  } catch (error) {
-    scheduleContent.replaceChildren(element("div", "empty-state", `Couldn’t load conference data: ${error.message}`));
+  scheduleContent.replaceChildren(element("div", "loading-state", "Loading the floor plan…"));
+  graphViewport.replaceChildren(element("div", "loading-state", "Mapping the conference…"));
+  const [scheduleResult, graphResult, fixesResult] = await Promise.allSettled([
+    api("/schedule"),
+    api("/graph"),
+    api("/fixes"),
+  ]);
+
+  if (scheduleResult.status === "fulfilled") {
+    renderSchedule(scheduleResult.value);
+  } else {
+    scheduleContent.replaceChildren(element(
+      "div", "empty-state", `Couldn’t load the schedule: ${scheduleResult.reason.message}`
+    ));
+  }
+  if (graphResult.status === "fulfilled") {
+    renderGraph(graphResult.value);
+  } else {
     graphViewport.replaceChildren(element("div", "empty-state", "Graph data is unavailable."));
-    graphSummary.textContent = "Could not connect to the operations API.";
+    graphSummary.textContent = "Could not load graph data.";
+  }
+  if (fixesResult.status === "fulfilled") {
+    const pending = fixesResult.value.filter((fix) => fix.status === "proposed").length;
+    document.querySelector("#pending-count").textContent = String(pending).padStart(2, "0");
+  } else {
+    document.querySelector("#pending-count").textContent = "—";
   }
 }
 
