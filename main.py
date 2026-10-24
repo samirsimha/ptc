@@ -1,13 +1,20 @@
 from fastapi import FastAPI
 from falkordb import FalkorDB
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import schema, seed
+import agents
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 db = FalkorDB(host="localhost", port=6379)
 g = db.select_graph("conf")
+
+
+class IncidentRequest(BaseModel):
+    text: str
+
 
 # send a Cypher query, get rows back
 def run_cypher(q, params=None):
@@ -53,3 +60,8 @@ def get_notis():
 def reset():
     seed.seed(g)
     return schema.audit(g)
+
+
+@app.post("/incident")
+def create_incident(request: IncidentRequest):
+    return agents.record_incident(g, request.text)
